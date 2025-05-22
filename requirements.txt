@@ -1,5 +1,5 @@
 python-telegram-bot==20.3
 apscheduler==3.6.3
 python-dotenv==1.0.0
-
+aiohttp
 
