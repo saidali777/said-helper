@@ -12,18 +12,15 @@ logger = logging.getLogger(__name__)
 
 # === Handler functions ===
 
-# Welcome new members
 async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for new_user in update.message.new_chat_members:
         await update.message.reply_text(
             f"Welcome, {new_user.full_name}! Please read /rules before chatting."
         )
 
-# /rules command
 async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Group Rules:\n1. Be respectful\n2. No spam\n3. Follow Telegram TOS")
 
-# /help command
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
         "/help - Show this message\n"
@@ -36,12 +33,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(help_text)
 
-# Check if user is admin
 async def is_admin(update: Update, user_id: int) -> bool:
     chat_admins = await update.effective_chat.get_administrators()
     return any(admin.user.id == user_id for admin in chat_admins)
 
-# Helper for moderation commands
 async def require_reply(update, context, action_name):
     if not update.message.reply_to_message:
         await update.message.reply_text(f"Reply to a user's message to use /{action_name}.")
@@ -51,7 +46,6 @@ async def require_reply(update, context, action_name):
         return None
     return update.message.reply_to_message.from_user
 
-# Moderation commands
 async def kick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await require_reply(update, context, "kick")
     if user:
@@ -138,13 +132,14 @@ def main():
     app.add_handler(CommandHandler("promote", promote))
     app.add_handler(CommandHandler("demote", demote))
 
-    # Webhook setup (use your actual Koyeb HTTPS domain below)
+    # Koyeb webhook setup: listens on port 8000 as required
     app.run_webhook(
         listen="0.0.0.0",
-        port=8443,
+        port=8000,
         url_path=token,
         webhook_url=f"https://cooperative-blondelle-saidali-0379e40c.koyeb.app/{token}"
     )
 
 if __name__ == "__main__":
     main()
+
