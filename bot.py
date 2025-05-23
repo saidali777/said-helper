@@ -118,38 +118,49 @@ async def demote(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             await update.message.reply_text(f"Failed to demote user: {e}")
 
+# Track groups where bot is present
 async def track_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
     active_groups.add(update.effective_chat.id)
 
-# === Periodic pinned message with auto-delete ===
+# Periodic announcement task with pin, delete, wait cycle
 async def periodic_announcements(app):
     while True:
         for chat_id in list(active_groups):
             try:
+                # Send announcement
                 msg = await app.bot.send_message(chat_id=chat_id, text=ANNOUNCEMENT_TEXT)
+                # Pin it (disable notification for pin)
                 await app.bot.pin_chat_message(chat_id=chat_id, message_id=msg.message_id, disable_notification=True)
-                await asyncio.sleep(180)  # Wait 3 minutes
-                await msg.delete()
-            except Exception as e:
-                logger.error(f"Error in {chat_id}: {e}")
-        await asyncio.sleep(60)  # Wait 1 minute before sending again
 
-# === Health check endpoint for Koyeb ===
+                # Wait 5 minutes
+                await asyncio.sleep(300)
+
+                # Delete the pinned message
+                await msg.delete()
+
+                # Wait 3 minutes before next message in this chat
+                await asyncio.sleep(180)
+
+            except Exception as e:
+                logger.error(f"Error in chat {chat_id}: {e}")
+
+        # Short delay before next cycle (optional)
+        await asyncio.sleep(5)
+
+
+# Health check endpoint for Koyeb
 async def health_check(request):
     return web.Response(text="OK")
 
-# === Main ===
-def main():
+
+async def start_bot():
     token = os.getenv("BOT_TOKEN")
     if not token:
         raise RuntimeError("BOT_TOKEN not set in environment variables.")
 
-    async def on_startup(app):
-        app.create_task(periodic_announcements(app))
+    app = ApplicationBuilder().token(token).build()
 
-    app = ApplicationBuilder().token(token).post_init(on_startup).build()
-
-    # Handlers
+    # Register handlers
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome))
     app.add_handler(CommandHandler("rules", rules))
     app.add_handler(CommandHandler("help", help_command))
@@ -160,20 +171,29 @@ def main():
     app.add_handler(CommandHandler("demote", demote))
     app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, track_groups))
 
-    # Web server for webhook + health check
-    web_app = web.Application()
-    web_app.add_routes([web.get("/", health_check)])
+    # Start the periodic announcement task
+    app.create_task(periodic_announcements(app))
 
-    app.run_webhook(
+    # Setup aiohttp web server for health check
+    aio_app = web.Application()
+    aio_app.add_routes([web.get("/", health_check)])
+
+    runner = web.AppRunner(aio_app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", 8000)
+    await site.start()
+
+    # Start Telegram webhook
+    await app.run_webhook(
         listen="0.0.0.0",
         port=8000,
         url_path=token,
         webhook_url=f"https://cooperative-blondelle-saidali-0379e40c.koyeb.app/{token}",
-        web_app=web_app
     )
 
+
 if __name__ == "__main__":
-    main()
+    asyncio.run(start_bot())
 
 
 
