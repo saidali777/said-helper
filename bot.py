@@ -114,16 +114,12 @@ async def periodic_announcement(app):
             try:
                 msg = await app.bot.send_message(chat_id=chat_id, text=ANNOUNCEMENT_TEXT)
                 await msg.pin()
-                # Keep pinned for 5 minutes
-                await asyncio.sleep(300)
-                # Unpin and delete message
+                await asyncio.sleep(300)  # 5 minutes
                 await msg.unpin()
                 await msg.delete()
+                await asyncio.sleep(180)  # 3 minutes before next cycle
             except Exception as e:
                 logger.warning(f"Failed in group {chat_id}: {e}")
-
-        # Wait 3 minutes before sending again
-        await asyncio.sleep(180)
 
 # === On startup ===
 
@@ -149,7 +145,7 @@ def main():
     app.add_handler(CommandHandler("mute", mute))
     app.add_handler(CommandHandler("promote", promote))
     app.add_handler(CommandHandler("demote", demote))
-    app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.ALL, track_chats))
+    app.add_handler(MessageHandler(filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP | filters.ChatType.PRIVATE, track_chats))
 
     app.run_webhook(
         listen="0.0.0.0",
@@ -160,4 +156,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
