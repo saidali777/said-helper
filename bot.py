@@ -1,6 +1,7 @@
 import logging
 import os
 import asyncio
+import json
 from telegram import Update, ChatPermissions
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
@@ -11,8 +12,28 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 ANNOUNCEMENT_TEXT = "📢 This is a recurring announcement."
+CHAT_IDS_FILE = "chat_ids.json"
 
-# === Handler functions ===
+# === JSON File Utilities ===
+
+def save_chat_ids(chat_ids):
+    try:
+        with open(CHAT_IDS_FILE, "w") as f:
+            json.dump(list(chat_ids), f)
+    except Exception as e:
+        logger.error(f"Error saving chat_ids: {e}")
+
+def load_chat_ids():
+    if not os.path.exists(CHAT_IDS_FILE):
+        return set()
+    try:
+        with open(CHAT_IDS_FILE, "r") as f:
+            return set(json.load(f))
+    except Exception as e:
+        logger.error(f"Error loading chat_ids: {e}")
+        return set()
+
+# === Handler Functions ===
 
 async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for new_user in update.message.new_chat_members:
@@ -21,9 +42,7 @@ async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Group Rules:\n1. Be respectful\n2. No spam\n3. Follow Telegram TOS"
-    )
+    await update.message.reply_text("Group Rules:\n1. Be respectful\n2. No spam\n3. Follow Telegram TOS")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -37,9 +56,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def is_admin(update: Update, user_id: int) -> bool:
-    # Return False if chat is private (no admins)
-    if update.effective_chat.type not in ['group', 'supergroup']:
-        return False
     chat_admins = await update.effective_chat.get_administrators()
     return any(admin.user.id == user_id for admin in chat_admins)
 
@@ -105,45 +121,47 @@ async def demote(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_text(f"Demoted {user.full_name}.")
 
-# === Track all group chat_ids ===
+# === Track group chat_ids and save to file ===
 
 async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     app = context.application
-    app.chat_ids.add(update.effective_chat.id)
+    chat_id = update.effective_chat.id
+    if chat_id not in app.chat_ids:
+        app.chat_ids.add(chat_id)
+        save_chat_ids(app.chat_ids)
 
 # === Periodic Announcement Function ===
 
 async def periodic_announcement(app):
+    await asyncio.sleep(5)
     while True:
         for chat_id in list(app.chat_ids):
             try:
                 msg = await app.bot.send_message(chat_id=chat_id, text=ANNOUNCEMENT_TEXT)
                 await msg.pin()
-                await asyncio.sleep(300)  # 5 minutes pinned
+                await asyncio.sleep(300)  # 5 minutes
                 await msg.unpin()
                 await msg.delete()
             except Exception as e:
                 logger.warning(f"Failed in group {chat_id}: {e}")
-
-        await asyncio.sleep(180)  # wait 3 minutes before next announcement
+        await asyncio.sleep(180)  # 3 minutes pause
 
 # === On startup ===
 
 async def on_startup(app):
-    app.chat_ids = set()
+    app.chat_ids = load_chat_ids()
     app.create_task(periodic_announcement(app))
 
 def main():
     token = os.getenv("BOT_TOKEN")
     if not token:
-        raise RuntimeError("BOT_TOKEN environment variable is not set")
+        raise RuntimeError("BOT_TOKEN not set")
 
     port = int(os.environ.get("PORT", 8000))
 
     app = ApplicationBuilder().token(token).build()
     app.post_init = on_startup
 
-    # Register handlers
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome))
     app.add_handler(CommandHandler("rules", rules))
     app.add_handler(CommandHandler("help", help_command))
@@ -154,7 +172,6 @@ def main():
     app.add_handler(CommandHandler("demote", demote))
     app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.ALL, track_chats))
 
-    # Use webhook with your Koyeb app URL (adjust URL accordingly)
     app.run_webhook(
         listen="0.0.0.0",
         port=port,
