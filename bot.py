@@ -1,20 +1,21 @@
 import logging
 import os
 import asyncio
-from aiohttp import web
 from telegram import Update, ChatPermissions
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
-    ContextTypes, filters, Application
+    ContextTypes, filters
 )
+from aiohttp import web
 
+# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 active_groups = set()
 ANNOUNCEMENT_TEXT = "📢 This is a scheduled announcement."
 
-# === Handler functions ===
+# === Command Handlers ===
 
 async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for new_user in update.message.new_chat_members:
@@ -118,63 +119,57 @@ async def demote(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             await update.message.reply_text(f"Failed to demote user: {e}")
 
-# Track any group the bot sees
 async def track_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
     active_groups.add(update.effective_chat.id)
 
-# Repeating announcement loop
-async def periodic_announcements(app: Application):
+async def periodic_announcements(app):
     while True:
         for chat_id in list(active_groups):
             try:
                 msg = await app.bot.send_message(chat_id=chat_id, text=ANNOUNCEMENT_TEXT)
-                await app.bot.pin_chat_message(chat_id=chat_id, message_id=msg.message_id)
                 await asyncio.sleep(300)
                 await msg.delete()
             except Exception as e:
-                logger.error(f"Error in {chat_id}: {e}")
-        await asyncio.sleep(180)
+                logger.error(f"Error sending announcement in {chat_id}: {e}")
+        await asyncio.sleep(300)
 
-# Health check server for Koyeb
-async def handle_healthcheck(request):
-    return web.Response(text="OK")
-
+# Healthcheck server for Koyeb
 async def run_healthcheck_server():
+    async def handle(request):
+        return web.Response(text="OK")
+
     app = web.Application()
-    app.router.add_get("/", handle_healthcheck)
+    app.router.add_get("/", handle)
+
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, port=8000)
+    site = web.TCPSite(runner, "0.0.0.0", 8000)
     await site.start()
     logger.info("Health check server started on port 8000")
 
-# === Main ===
-async def on_startup(app):
-    await run_healthcheck_server()
-    app.create_task(periodic_announcements(app))
+# === Main entry point ===
 
-def main():
+async def main():
     token = os.getenv("BOT_TOKEN")
     if not token:
         raise RuntimeError("BOT_TOKEN not set in environment variables.")
 
-    app = ApplicationBuilder().token(token).build()
+    app_ = ApplicationBuilder().token(token).build()
 
-    # Register handlers
-    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome))
-    app.add_handler(CommandHandler("rules", rules))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("kick", kick))
-    app.add_handler(CommandHandler("ban", ban))
-    app.add_handler(CommandHandler("mute", mute))
-    app.add_handler(CommandHandler("promote", promote))
-    app.add_handler(CommandHandler("demote", demote))
-    app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, track_groups))
+    app_.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome))
+    app_.add_handler(CommandHandler("rules", rules))
+    app_.add_handler(CommandHandler("help", help_command))
+    app_.add_handler(CommandHandler("kick", kick))
+    app_.add_handler(CommandHandler("ban", ban))
+    app_.add_handler(CommandHandler("mute", mute))
+    app_.add_handler(CommandHandler("promote", promote))
+    app_.add_handler(CommandHandler("demote", demote))
+    app_.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, track_groups))
 
-    # Register startup callback
-    app.on_startup(on_startup)
+    await run_healthcheck_server()
+    app_.create_task(periodic_announcements(app_))
 
-    app.run_webhook(
+    await app_.run_webhook(
         listen="0.0.0.0",
         port=8000,
         url_path=token,
@@ -182,9 +177,4 @@ def main():
     )
 
 if __name__ == "__main__":
-    main()
-
-
-
-
-
+    asyncio.run(main())
