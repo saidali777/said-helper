@@ -104,13 +104,23 @@ async def demote(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def periodic_announcement(app):
     while True:
-        await asyncio.sleep(300)  # Wait 5 minutes
+        if not app.chat_ids:
+            await asyncio.sleep(10)
+            continue
+
         for chat_id in list(app.chat_ids):
             try:
                 msg = await app.bot.send_message(chat_id=chat_id, text=ANNOUNCEMENT_TEXT)
-                await msg.pin()
-                await asyncio.sleep(300)  # Wait another 5 minutes before deleting
+                await msg.pin(disable_notification=True)
+                logger.info(f"Pinned announcement in chat {chat_id}")
+
+                await asyncio.sleep(180)  # Wait 3 minutes
+
                 await msg.delete()
+                logger.info(f"Deleted announcement in chat {chat_id}")
+
+                await asyncio.sleep(60)  # Wait 1 minute before next pin
+
             except Exception as e:
                 logger.warning(f"Failed in group {chat_id}: {e}")
 
@@ -118,13 +128,15 @@ async def periodic_announcement(app):
 
 async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     app = context.application
-    app.chat_ids.add(update.effective_chat.id)
+    if update.effective_chat.id not in app.chat_ids:
+        app.chat_ids.add(update.effective_chat.id)
+        logger.info(f"Tracking chat id {update.effective_chat.id}")
 
 # === Main Function ===
 
 async def on_startup(app):
     app.chat_ids = set()
-    asyncio.create_task(periodic_announcement(app))
+    app.create_task(periodic_announcement(app))
 
 def main():
     token = os.getenv("BOT_TOKEN")
@@ -146,12 +158,7 @@ def main():
     app.add_handler(CommandHandler("demote", demote))
     app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.ALL, track_chats))
 
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=8000,
-        url_path=token,
-        webhook_url=f"https://cooperative-blondelle-saidali-0379e40c.koyeb.app/{token}"
-    )
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
