@@ -21,7 +21,9 @@ async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Group Rules:\n1. Be respectful\n2. No spam\n3. Follow Telegram TOS")
+    await update.message.reply_text(
+        "Group Rules:\n1. Be respectful\n2. No spam\n3. Follow Telegram TOS"
+    )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -35,6 +37,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def is_admin(update: Update, user_id: int) -> bool:
+    # Return False if chat is private (no admins)
+    if update.effective_chat.type not in ['group', 'supergroup']:
+        return False
     chat_admins = await update.effective_chat.get_administrators()
     return any(admin.user.id == user_id for admin in chat_admins)
 
@@ -114,16 +119,13 @@ async def periodic_announcement(app):
             try:
                 msg = await app.bot.send_message(chat_id=chat_id, text=ANNOUNCEMENT_TEXT)
                 await msg.pin()
-                # Keep pinned for 5 minutes
-                await asyncio.sleep(300)
-                # Unpin and delete message
+                await asyncio.sleep(300)  # 5 minutes pinned
                 await msg.unpin()
                 await msg.delete()
             except Exception as e:
                 logger.warning(f"Failed in group {chat_id}: {e}")
 
-        # Wait 3 minutes before sending again
-        await asyncio.sleep(180)
+        await asyncio.sleep(180)  # wait 3 minutes before next announcement
 
 # === On startup ===
 
@@ -134,7 +136,7 @@ async def on_startup(app):
 def main():
     token = os.getenv("BOT_TOKEN")
     if not token:
-        raise RuntimeError("BOT_TOKEN not set")
+        raise RuntimeError("BOT_TOKEN environment variable is not set")
 
     port = int(os.environ.get("PORT", 8000))
 
@@ -152,6 +154,7 @@ def main():
     app.add_handler(CommandHandler("demote", demote))
     app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.ALL, track_chats))
 
+    # Use webhook with your Koyeb app URL (adjust URL accordingly)
     app.run_webhook(
         listen="0.0.0.0",
         port=port,
@@ -161,6 +164,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
