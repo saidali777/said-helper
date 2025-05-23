@@ -104,7 +104,7 @@ async def demote(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def periodic_announcement(app):
     while True:
-        await asyncio.sleep(120)  # Wait 5 minutes
+        await asyncio.sleep(300)  # Wait 5 minutes
         for chat_id in list(app.chat_ids):
             try:
                 msg = await app.bot.send_message(chat_id=chat_id, text=ANNOUNCEMENT_TEXT)
