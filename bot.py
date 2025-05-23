@@ -1,13 +1,17 @@
 import logging
 import os
+import asyncio
 from telegram import Update, ChatPermissions
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
-    filters, ContextTypes
+    ContextTypes, filters
 )
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+active_groups = set()
+ANNOUNCEMENT_TEXT = "📢 This is a scheduled announcement."
 
 # === Handler functions ===
 
@@ -27,14 +31,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/kick - Kick a user (reply only)\n"
         "/ban - Ban a user (reply only)\n"
         "/mute - Mute a user (reply only)\n"
-        "/promote - Promote user to admin (reply only)\n"
+        "/promote - Promote to admin (reply only)\n"
         "/demote - Demote admin (reply only)"
     )
     await update.message.reply_text(help_text)
 
 async def is_admin(update: Update, user_id: int) -> bool:
-    chat_admins = await update.effective_chat.get_administrators()
-    return any(admin.user.id == user_id for admin in chat_admins)
+    admins = await update.effective_chat.get_administrators()
+    return any(admin.user.id == user_id for admin in admins)
 
 async def require_reply(update, context, action_name):
     if not update.message.reply_to_message:
@@ -91,7 +95,7 @@ async def promote(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 can_pin_messages=True,
                 can_promote_members=False,
             )
-            await update.message.reply_text(f"Promoted {user.full_name} to admin.")
+            await update.message.reply_text(f"Promoted {user.full_name}")
         except Exception as e:
             await update.message.reply_text(f"Failed to promote user: {e}")
 
@@ -109,19 +113,25 @@ async def demote(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 can_pin_messages=False,
                 can_promote_members=False,
             )
-            await update.message.reply_text(f"Demoted {user.full_name}.")
+            await update.message.reply_text(f"Demoted {user.full_name}")
         except Exception as e:
             await update.message.reply_text(f"Failed to demote user: {e}")
 
-# === Auto-pin handler ===
-async def auto_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        user_id = update.message.from_user.id
-        chat_admins = await update.effective_chat.get_administrators()
-        if any(admin.user.id == user_id for admin in chat_admins):
-            await update.message.pin()
-    except Exception as e:
-        logger.error(f"Auto-pin error: {e}")
+# Track any group the bot sees
+async def track_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    active_groups.add(update.effective_chat.id)
+
+# Repeating announcement loop
+async def periodic_announcement(app):
+    while True:
+        for chat_id in list(active_groups):
+            try:
+                msg = await app.bot.send_message(chat_id=chat_id, text=ANNOUNCEMENT_TEXT)
+                await asyncio.sleep(300)
+                await msg.delete()
+            except Exception as e:
+                logger.error(f"Error in {chat_id}: {e}")
+        await asyncio.sleep(300)
 
 # === Main ===
 def main():
@@ -131,6 +141,7 @@ def main():
 
     app = ApplicationBuilder().token(token).build()
 
+    # Register handlers
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome))
     app.add_handler(CommandHandler("rules", rules))
     app.add_handler(CommandHandler("help", help_command))
@@ -139,8 +150,12 @@ def main():
     app.add_handler(CommandHandler("mute", mute))
     app.add_handler(CommandHandler("promote", promote))
     app.add_handler(CommandHandler("demote", demote))
-    app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, auto_pin))
+    app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, track_groups))
 
+    # Start announcement loop
+    app.post_init = lambda app: app.create_task(periodic_announcement(app))
+
+    # Run bot with webhook
     app.run_webhook(
         listen="0.0.0.0",
         port=8000,
@@ -150,4 +165,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
