@@ -106,7 +106,7 @@ async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     app = context.application
     app.chat_ids.add(update.effective_chat.id)
 
-# === Periodic Announcement Function ===
+# === Periodic Announcement Loop ===
 
 async def periodic_announcement(app):
     while True:
@@ -114,12 +114,12 @@ async def periodic_announcement(app):
             try:
                 msg = await app.bot.send_message(chat_id=chat_id, text=ANNOUNCEMENT_TEXT)
                 await msg.pin()
-                await asyncio.sleep(300)  # 5 minutes
+                await asyncio.sleep(300)  # Wait 5 minutes
                 await msg.unpin()
                 await msg.delete()
-                await asyncio.sleep(180)  # 3 minutes before next cycle
             except Exception as e:
-                logger.warning(f"Failed in group {chat_id}: {e}")
+                logger.warning(f"Error in group {chat_id}: {e}")
+        # No wait time — instantly repeat
 
 # === On startup ===
 
@@ -127,16 +127,15 @@ async def on_startup(app):
     app.chat_ids = set()
     app.create_task(periodic_announcement(app))
 
+# === Main ===
+
 def main():
     token = os.getenv("BOT_TOKEN")
     if not token:
         raise RuntimeError("BOT_TOKEN not set")
 
-    app = ApplicationBuilder().token(token).build()
+    app = ApplicationBuilder().token(token).post_init(on_startup).build()
 
-    app.post_init = on_startup
-
-    # Register handlers
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome))
     app.add_handler(CommandHandler("rules", rules))
     app.add_handler(CommandHandler("help", help_command))
@@ -145,14 +144,9 @@ def main():
     app.add_handler(CommandHandler("mute", mute))
     app.add_handler(CommandHandler("promote", promote))
     app.add_handler(CommandHandler("demote", demote))
-    app.add_handler(MessageHandler(filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP | filters.ChatType.PRIVATE, track_chats))
+    app.add_handler(MessageHandler(filters.ALL, track_chats))
 
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=8000,
-        url_path=token,
-        webhook_url=f"https://cooperative-blondelle-saidali-0379e40c.koyeb.app/{token}"
-    )
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
