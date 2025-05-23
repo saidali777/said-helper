@@ -6,16 +6,13 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     ContextTypes, filters
 )
-from aiohttp import web
 
-# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-active_groups = set()
-ANNOUNCEMENT_TEXT = "📢 This is a scheduled announcement."
+ANNOUNCEMENT_TEXT = "📢 This is a recurring announcement."
 
-# === Command Handlers ===
+# === Handler functions ===
 
 async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for new_user in update.message.new_chat_members:
@@ -27,20 +24,19 @@ async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Group Rules:\n1. Be respectful\n2. No spam\n3. Follow Telegram TOS")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    help_text = (
+    await update.message.reply_text(
         "/help - Show this message\n"
         "/rules - Show group rules\n"
         "/kick - Kick a user (reply only)\n"
         "/ban - Ban a user (reply only)\n"
         "/mute - Mute a user (reply only)\n"
-        "/promote - Promote to admin (reply only)\n"
+        "/promote - Promote user to admin (reply only)\n"
         "/demote - Demote admin (reply only)"
     )
-    await update.message.reply_text(help_text)
 
 async def is_admin(update: Update, user_id: int) -> bool:
-    admins = await update.effective_chat.get_administrators()
-    return any(admin.user.id == user_id for admin in admins)
+    chat_admins = await update.effective_chat.get_administrators()
+    return any(admin.user.id == user_id for admin in chat_admins)
 
 async def require_reply(update, context, action_name):
     if not update.message.reply_to_message:
@@ -54,122 +50,103 @@ async def require_reply(update, context, action_name):
 async def kick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await require_reply(update, context, "kick")
     if user:
-        try:
-            await context.bot.ban_chat_member(update.effective_chat.id, user.id)
-            await context.bot.unban_chat_member(update.effective_chat.id, user.id)
-            await update.message.reply_text(f"Kicked {user.full_name}")
-        except Exception as e:
-            await update.message.reply_text(f"Failed to kick user: {e}")
+        await context.bot.ban_chat_member(update.effective_chat.id, user.id)
+        await context.bot.unban_chat_member(update.effective_chat.id, user.id)
+        await update.message.reply_text(f"Kicked {user.full_name}")
 
 async def ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await require_reply(update, context, "ban")
     if user:
-        try:
-            await context.bot.ban_chat_member(update.effective_chat.id, user.id)
-            await update.message.reply_text(f"Banned {user.full_name}")
-        except Exception as e:
-            await update.message.reply_text(f"Failed to ban user: {e}")
+        await context.bot.ban_chat_member(update.effective_chat.id, user.id)
+        await update.message.reply_text(f"Banned {user.full_name}")
 
 async def mute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await require_reply(update, context, "mute")
     if user:
-        try:
-            await context.bot.restrict_chat_member(
-                update.effective_chat.id,
-                user.id,
-                permissions=ChatPermissions(can_send_messages=False),
-            )
-            await update.message.reply_text(f"Muted {user.full_name}")
-        except Exception as e:
-            await update.message.reply_text(f"Failed to mute user: {e}")
+        await context.bot.restrict_chat_member(
+            update.effective_chat.id,
+            user.id,
+            permissions=ChatPermissions(can_send_messages=False),
+        )
+        await update.message.reply_text(f"Muted {user.full_name}")
 
 async def promote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await require_reply(update, context, "promote")
     if user:
-        try:
-            await context.bot.promote_chat_member(
-                update.effective_chat.id,
-                user.id,
-                can_change_info=True,
-                can_delete_messages=True,
-                can_invite_users=True,
-                can_restrict_members=True,
-                can_pin_messages=True,
-                can_promote_members=False,
-            )
-            await update.message.reply_text(f"Promoted {user.full_name}")
-        except Exception as e:
-            await update.message.reply_text(f"Failed to promote user: {e}")
+        await context.bot.promote_chat_member(
+            update.effective_chat.id,
+            user.id,
+            can_change_info=True,
+            can_delete_messages=True,
+            can_invite_users=True,
+            can_restrict_members=True,
+            can_pin_messages=True,
+            can_promote_members=False,
+        )
+        await update.message.reply_text(f"Promoted {user.full_name} to admin.")
 
 async def demote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await require_reply(update, context, "demote")
     if user:
-        try:
-            await context.bot.promote_chat_member(
-                update.effective_chat.id,
-                user.id,
-                can_change_info=False,
-                can_delete_messages=False,
-                can_invite_users=False,
-                can_restrict_members=False,
-                can_pin_messages=False,
-                can_promote_members=False,
-            )
-            await update.message.reply_text(f"Demoted {user.full_name}")
-        except Exception as e:
-            await update.message.reply_text(f"Failed to demote user: {e}")
+        await context.bot.promote_chat_member(
+            update.effective_chat.id,
+            user.id,
+            can_change_info=False,
+            can_delete_messages=False,
+            can_invite_users=False,
+            can_restrict_members=False,
+            can_pin_messages=False,
+            can_promote_members=False,
+        )
+        await update.message.reply_text(f"Demoted {user.full_name}.")
 
-async def track_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    active_groups.add(update.effective_chat.id)
+# === Periodic Announcement Function ===
 
-async def periodic_announcements(app):
+async def periodic_announcement(app):
     while True:
-        for chat_id in list(active_groups):
+        await asyncio.sleep(300)  # Wait 5 minutes
+        for chat_id in list(app.chat_ids):
             try:
                 msg = await app.bot.send_message(chat_id=chat_id, text=ANNOUNCEMENT_TEXT)
-                await asyncio.sleep(300)
+                await msg.pin()
+                await asyncio.sleep(300)  # Wait another 5 minutes before deleting
                 await msg.delete()
             except Exception as e:
-                logger.error(f"Error sending announcement in {chat_id}: {e}")
-        await asyncio.sleep(300)
+                logger.warning(f"Failed in group {chat_id}: {e}")
 
-# Healthcheck server for Koyeb
-async def run_healthcheck_server():
-    async def handle(request):
-        return web.Response(text="OK")
+# === Track all group chat_ids ===
 
-    app = web.Application()
-    app.router.add_get("/", handle)
+async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    app = context.application
+    app.chat_ids.add(update.effective_chat.id)
 
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", 8000)
-    await site.start()
-    logger.info("Health check server started on port 8000")
+# === Main Function ===
 
-# === Main entry point ===
+async def on_startup(app):
+    app.chat_ids = set()
+    asyncio.create_task(periodic_announcement(app))
 
-async def main():
+def main():
     token = os.getenv("BOT_TOKEN")
     if not token:
-        raise RuntimeError("BOT_TOKEN not set in environment variables.")
+        raise RuntimeError("BOT_TOKEN not set")
 
-    app_ = ApplicationBuilder().token(token).build()
+    app = ApplicationBuilder().token(token).build()
 
-    app_.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome))
-    app_.add_handler(CommandHandler("rules", rules))
-    app_.add_handler(CommandHandler("help", help_command))
-    app_.add_handler(CommandHandler("kick", kick))
-    app_.add_handler(CommandHandler("ban", ban))
-    app_.add_handler(CommandHandler("mute", mute))
-    app_.add_handler(CommandHandler("promote", promote))
-    app_.add_handler(CommandHandler("demote", demote))
-    app_.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, track_groups))
+    app.post_init = on_startup
 
-    await run_healthcheck_server()
-    app_.create_task(periodic_announcements(app_))
+    # Register handlers
+    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome))
+    app.add_handler(CommandHandler("rules", rules))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("kick", kick))
+    app.add_handler(CommandHandler("ban", ban))
+    app.add_handler(CommandHandler("mute", mute))
+    app.add_handler(CommandHandler("promote", promote))
+    app.add_handler(CommandHandler("demote", demote))
+    app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.ALL, track_chats))
 
-    await app_.run_webhook(
+    app.run_webhook(
         listen="0.0.0.0",
         port=8000,
         url_path=token,
@@ -177,4 +154,5 @@ async def main():
     )
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
+
