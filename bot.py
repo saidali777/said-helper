@@ -101,26 +101,26 @@ async def demote(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Demoted {user.full_name}.")
 
 # === Periodic Announcement Function ===
-# Auto pin message, wait 3 min, unpin, wait 1 min, repin, repeat...
 
 async def periodic_announcement(app):
-    while True:
-        await asyncio.sleep(180)  # Wait 3 minutes before first announcement
-        for chat_id in list(app.chat_ids):
-            try:
-                msg = await app.bot.send_message(chat_id=chat_id, text=ANNOUNCEMENT_TEXT)
-                await msg.pin()
-                await asyncio.sleep(180)  # Pin duration 3 minutes
-                await msg.unpin()
-                await asyncio.sleep(60)   # Wait 1 minute before repin
-                # Repin the same message object if still valid (or resend)
-                # Telegram API doesn't allow re-pin of deleted message,
-                # so we repin the same message if possible.
-                await msg.pin()
-                await asyncio.sleep(180)  # Keep pinned again for 3 minutes
-                await msg.unpin()
-            except Exception as e:
-                logger.warning(f"Failed in group {chat_id}: {e}")
+    try:
+        while True:
+            # Every 3 minutes send announcement, pin it, then after 1 min repin, after 2 min delete and repeat
+            for chat_id in list(app.chat_ids):
+                try:
+                    msg = await app.bot.send_message(chat_id=chat_id, text=ANNOUNCEMENT_TEXT)
+                    await msg.pin()
+                    await asyncio.sleep(60)  # wait 1 min
+                    await msg.unpin()
+                    await msg.pin()
+                    await asyncio.sleep(120)  # wait 2 more min
+                    await msg.delete()
+                except Exception as e:
+                    logger.warning(f"Failed in group {chat_id}: {e}")
+            # Cycle repeats every 3 minutes after full sequence
+    except asyncio.CancelledError:
+        logger.info("periodic_announcement task cancelled")
+        raise
 
 # === Track all group chat_ids ===
 
@@ -128,11 +128,23 @@ async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     app = context.application
     app.chat_ids.add(update.effective_chat.id)
 
-# === Startup Hook ===
+# === Main Function & Task Management ===
+
+periodic_task = None  # global task reference
 
 async def on_startup(app):
+    global periodic_task
     app.chat_ids = set()
-    asyncio.create_task(periodic_announcement(app))
+    periodic_task = asyncio.create_task(periodic_announcement(app))
+
+async def on_shutdown(app):
+    global periodic_task
+    if periodic_task:
+        periodic_task.cancel()
+        try:
+            await periodic_task
+        except asyncio.CancelledError:
+            logger.info("periodic_announcement task shutdown cleanly")
 
 def main():
     token = os.getenv("BOT_TOKEN")
@@ -140,7 +152,9 @@ def main():
         raise RuntimeError("BOT_TOKEN not set")
 
     app = ApplicationBuilder().token(token).build()
+
     app.post_init = on_startup
+    app.pre_shutdown = on_shutdown
 
     # Register handlers
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome))
@@ -153,8 +167,12 @@ def main():
     app.add_handler(CommandHandler("demote", demote))
     app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.ALL, track_chats))
 
-    # Run bot in polling mode (change to run_webhook if you want webhook mode)
-    app.run_polling()
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=8000,
+        url_path=token,
+        webhook_url=f"https://cooperative-blondelle-saidali-0379e40c.koyeb.app/{token}"
+    )
 
 if __name__ == "__main__":
     main()
