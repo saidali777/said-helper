@@ -101,26 +101,24 @@ async def demote(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Demoted {user.full_name}.")
 
 # === Periodic Announcement Function ===
+# Auto pin message, wait 3 min, unpin, wait 1 min, repin, repeat...
 
 async def periodic_announcement(app):
     while True:
-        if not app.chat_ids:
-            await asyncio.sleep(10)
-            continue
-
+        await asyncio.sleep(180)  # Wait 3 minutes before first announcement
         for chat_id in list(app.chat_ids):
             try:
                 msg = await app.bot.send_message(chat_id=chat_id, text=ANNOUNCEMENT_TEXT)
-                await msg.pin(disable_notification=True)
-                logger.info(f"Pinned announcement in chat {chat_id}")
-
-                await asyncio.sleep(180)  # Wait 3 minutes
-
-                await msg.delete()
-                logger.info(f"Deleted announcement in chat {chat_id}")
-
-                await asyncio.sleep(60)  # Wait 1 minute before next pin
-
+                await msg.pin()
+                await asyncio.sleep(180)  # Pin duration 3 minutes
+                await msg.unpin()
+                await asyncio.sleep(60)   # Wait 1 minute before repin
+                # Repin the same message object if still valid (or resend)
+                # Telegram API doesn't allow re-pin of deleted message,
+                # so we repin the same message if possible.
+                await msg.pin()
+                await asyncio.sleep(180)  # Keep pinned again for 3 minutes
+                await msg.unpin()
             except Exception as e:
                 logger.warning(f"Failed in group {chat_id}: {e}")
 
@@ -128,15 +126,13 @@ async def periodic_announcement(app):
 
 async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     app = context.application
-    if update.effective_chat.id not in app.chat_ids:
-        app.chat_ids.add(update.effective_chat.id)
-        logger.info(f"Tracking chat id {update.effective_chat.id}")
+    app.chat_ids.add(update.effective_chat.id)
 
-# === Main Function ===
+# === Startup Hook ===
 
 async def on_startup(app):
     app.chat_ids = set()
-    app.create_task(periodic_announcement(app))
+    asyncio.create_task(periodic_announcement(app))
 
 def main():
     token = os.getenv("BOT_TOKEN")
@@ -144,7 +140,6 @@ def main():
         raise RuntimeError("BOT_TOKEN not set")
 
     app = ApplicationBuilder().token(token).build()
-
     app.post_init = on_startup
 
     # Register handlers
@@ -158,6 +153,7 @@ def main():
     app.add_handler(CommandHandler("demote", demote))
     app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.ALL, track_chats))
 
+    # Run bot in polling mode (change to run_webhook if you want webhook mode)
     app.run_polling()
 
 if __name__ == "__main__":
