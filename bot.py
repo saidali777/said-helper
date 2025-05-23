@@ -5,7 +5,7 @@ from aiohttp import web
 from telegram import Update, ChatPermissions
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
-    ContextTypes, filters
+    ContextTypes, filters, Application
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -122,43 +122,37 @@ async def demote(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def track_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
     active_groups.add(update.effective_chat.id)
 
-# Health check endpoint for aiohttp
-async def health_check(request):
-    return web.Response(text="OK")
-
-async def run_healthcheck_server():
-    aio_app = web.Application()
-    aio_app.add_routes([web.get("/", health_check)])
-    runner = web.AppRunner(aio_app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", 8000)
-    await site.start()
-    logger.info("Health check server started on port 8000")
-
-# Repeating pinned announcement loop per group
-async def periodic_announcements(app):
+# Repeating announcement loop
+async def periodic_announcements(app: Application):
     while True:
         for chat_id in list(active_groups):
             try:
-                # Send announcement message
                 msg = await app.bot.send_message(chat_id=chat_id, text=ANNOUNCEMENT_TEXT)
-                # Pin the message
-                await app.bot.pin_chat_message(chat_id=chat_id, message_id=msg.message_id, disable_notification=True)
-
-                # Wait 5 minutes before deleting pinned message
+                await app.bot.pin_chat_message(chat_id=chat_id, message_id=msg.message_id)
                 await asyncio.sleep(300)
-
-                # Unpin the message and delete it
-                await app.bot.unpin_chat_message(chat_id=chat_id, message_id=msg.message_id)
                 await msg.delete()
-
-                # Wait 3 minutes before posting again
-                await asyncio.sleep(180)
-
             except Exception as e:
-                logger.error(f"Error in periodic announcement for chat {chat_id}: {e}")
+                logger.error(f"Error in {chat_id}: {e}")
+        await asyncio.sleep(180)
+
+# Health check server for Koyeb
+async def handle_healthcheck(request):
+    return web.Response(text="OK")
+
+async def run_healthcheck_server():
+    app = web.Application()
+    app.router.add_get("/", handle_healthcheck)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, port=8000)
+    await site.start()
+    logger.info("Health check server started on port 8000")
 
 # === Main ===
+async def on_startup(app):
+    await run_healthcheck_server()
+    app.create_task(periodic_announcements(app))
+
 def main():
     token = os.getenv("BOT_TOKEN")
     if not token:
@@ -177,23 +171,19 @@ def main():
     app.add_handler(CommandHandler("demote", demote))
     app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, track_groups))
 
-    # Startup function to start health check server and periodic announcements
-    async def on_startup(app_):
-        await run_healthcheck_server()
-        app_.create_task(periodic_announcements(app_))
+    # Register startup callback
+    app.on_startup(on_startup)
 
-    app.post_init = on_startup
-
-    # Run webhook server (manages asyncio loop internally)
     app.run_webhook(
         listen="0.0.0.0",
         port=8000,
         url_path=token,
-        webhook_url=f"https://cooperative-blondelle-saidali-0379e40c.koyeb.app/{token}",
+        webhook_url=f"https://cooperative-blondelle-saidali-0379e40c.koyeb.app/{token}"
     )
 
 if __name__ == "__main__":
     main()
+
 
 
 
