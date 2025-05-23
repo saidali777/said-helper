@@ -1,6 +1,7 @@
 import logging
 import os
 import asyncio
+from aiohttp import web
 from telegram import Update, ChatPermissions
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
@@ -104,9 +105,12 @@ async def demote(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     app = context.application
-    app.chat_ids.add(update.effective_chat.id)
+    chat_id = update.effective_chat.id
+    if chat_id not in app.chat_ids:
+        app.chat_ids.add(chat_id)
+        logger.info(f"Tracking new chat id: {chat_id}")
 
-# === Periodic Announcement Loop ===
+# === Periodic Announcement Function ===
 
 async def periodic_announcement(app):
     while True:
@@ -114,41 +118,68 @@ async def periodic_announcement(app):
             try:
                 msg = await app.bot.send_message(chat_id=chat_id, text=ANNOUNCEMENT_TEXT)
                 await msg.pin()
-                await asyncio.sleep(300)  # Wait 5 minutes
+                # Keep pinned for 5 minutes
+                await asyncio.sleep(300)
+                # Unpin and delete message
                 await msg.unpin()
                 await msg.delete()
             except Exception as e:
-                logger.warning(f"Error in group {chat_id}: {e}")
-        # No wait time — instantly repeat
+                logger.warning(f"Failed in group {chat_id}: {e}")
+
+        # Wait 3 minutes before sending again
+        await asyncio.sleep(180)
+
+# === Health check server for TCP health probes ===
+
+async def health_check(request):
+    return web.Response(text="OK")
+
+async def start_health_server():
+    app = web.Application()
+    app.router.add_get('/', health_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', int(os.environ.get("PORT", 8000)))
+    await site.start()
+    logger.info("Health check server started on port %s", os.environ.get("PORT", 8000))
 
 # === On startup ===
 
 async def on_startup(app):
     app.chat_ids = set()
     app.create_task(periodic_announcement(app))
-
-# === Main ===
+    app.create_task(start_health_server())
 
 def main():
     token = os.getenv("BOT_TOKEN")
     if not token:
         raise RuntimeError("BOT_TOKEN not set")
 
-    app = ApplicationBuilder().token(token).post_init(on_startup).build()
+    port = int(os.environ.get("PORT", 8000))
 
-    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome))
-    app.add_handler(CommandHandler("rules", rules))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("kick", kick))
-    app.add_handler(CommandHandler("ban", ban))
-    app.add_handler(CommandHandler("mute", mute))
-    app.add_handler(CommandHandler("promote", promote))
-    app.add_handler(CommandHandler("demote", demote))
-    app.add_handler(MessageHandler(filters.ALL, track_chats))
+    application = ApplicationBuilder().token(token).build()
+    application.post_init = on_startup
 
-    app.run_polling()
+    # Register handlers
+    application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome))
+    application.add_handler(CommandHandler("rules", rules))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("kick", kick))
+    application.add_handler(CommandHandler("ban", ban))
+    application.add_handler(CommandHandler("mute", mute))
+    application.add_handler(CommandHandler("promote", promote))
+    application.add_handler(CommandHandler("demote", demote))
+    application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.ALL, track_chats))
+
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        url_path=token,
+        webhook_url=f"https://cooperative-blondelle-saidali-0379e40c.koyeb.app/{token}"
+    )
 
 if __name__ == "__main__":
     main()
+
 
 
