@@ -103,24 +103,18 @@ async def demote(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # === Periodic Announcement Function ===
 
 async def periodic_announcement(app):
-    try:
-        while True:
-            # Every 3 minutes send announcement, pin it, then after 1 min repin, after 2 min delete and repeat
-            for chat_id in list(app.chat_ids):
-                try:
-                    msg = await app.bot.send_message(chat_id=chat_id, text=ANNOUNCEMENT_TEXT)
-                    await msg.pin()
-                    await asyncio.sleep(60)  # wait 1 min
-                    await msg.unpin()
-                    await msg.pin()
-                    await asyncio.sleep(120)  # wait 2 more min
-                    await msg.delete()
-                except Exception as e:
-                    logger.warning(f"Failed in group {chat_id}: {e}")
-            # Cycle repeats every 3 minutes after full sequence
-    except asyncio.CancelledError:
-        logger.info("periodic_announcement task cancelled")
-        raise
+    while True:
+        await asyncio.sleep(180)  # Wait 3 minutes
+        for chat_id in list(app.chat_ids):
+            try:
+                msg = await app.bot.send_message(chat_id=chat_id, text=ANNOUNCEMENT_TEXT)
+                await msg.pin()
+                await asyncio.sleep(60)  # Wait 1 minute then re-pin
+                await msg.pin()
+                await asyncio.sleep(120)  # Wait 2 more minutes (total 3 mins)
+                await msg.delete()
+            except Exception as e:
+                logger.warning(f"Failed in group {chat_id}: {e}")
 
 # === Track all group chat_ids ===
 
@@ -128,23 +122,11 @@ async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     app = context.application
     app.chat_ids.add(update.effective_chat.id)
 
-# === Main Function & Task Management ===
-
-periodic_task = None  # global task reference
+# === Main Function ===
 
 async def on_startup(app):
-    global periodic_task
     app.chat_ids = set()
-    periodic_task = asyncio.create_task(periodic_announcement(app))
-
-async def on_shutdown(app):
-    global periodic_task
-    if periodic_task:
-        periodic_task.cancel()
-        try:
-            await periodic_task
-        except asyncio.CancelledError:
-            logger.info("periodic_announcement task shutdown cleanly")
+    app.create_task(periodic_announcement(app))
 
 def main():
     token = os.getenv("BOT_TOKEN")
@@ -154,7 +136,6 @@ def main():
     app = ApplicationBuilder().token(token).build()
 
     app.post_init = on_startup
-    app.pre_shutdown = on_shutdown
 
     # Register handlers
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome))
@@ -176,4 +157,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
