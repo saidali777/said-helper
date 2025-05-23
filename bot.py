@@ -1,69 +1,81 @@
 import logging
 import os
 import asyncio
-from datetime import datetime, timedelta
-from telegram import Update, ChatPermissions
-from telegram.constants import ChatAction
+from telegram import Update
 from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    ContextTypes,
-    MessageHandler,
-    filters,
+    ApplicationBuilder, CommandHandler, MessageHandler,
+    ContextTypes, filters
 )
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-scheduler = AsyncIOScheduler()
-announcement_interval = 3 * 60  # 3 minutes
-repin_interval = 1 * 60  # 1 minute
+ANNOUNCEMENT_TEXT = "📢 This is a recurring announcement."
 
-def get_announcement_text():
-    return "\u2728 *Reminder* \u2728\nPlease follow the group rules and be respectful!"
+# === Handler functions ===
 
 async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    for member in update.message.new_chat_members:
-        await update.message.reply_text(f"Welcome, {member.full_name}!")
+    for new_user in update.message.new_chat_members:
+        await update.message.reply_text(
+            f"Welcome, {new_user.full_name}! Please read /rules before chatting."
+        )
 
 async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Please be respectful and follow the group rules.")
+    await update.message.reply_text("Group Rules:\n1. Be respectful\n2. No spam\n3. Follow Telegram TOS")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("I'm here to help! Use /rules to see the rules.")
+    await update.message.reply_text(
+        "/help - Show this message\n"
+        "/rules - Show group rules\n"
+        "/kick - Kick a user (reply only)\n"
+        "/ban - Ban a user (reply only)\n"
+        "/mute - Mute a user (reply only)\n"
+        "/promote - Promote user to admin (reply only)\n"
+        "/demote - Demote admin (reply only)"
+    )
+
+async def is_admin(update: Update, user_id: int) -> bool:
+    chat_admins = await update.effective_chat.get_administrators()
+    return any(admin.user.id == user_id for admin in chat_admins)
+
+async def require_reply(update, context, action_name):
+    if not update.message.reply_to_message:
+        await update.message.reply_text(f"Reply to a user's message to use /{action_name}.")
+        return None
+    if not await is_admin(update, update.message.from_user.id):
+        await update.message.reply_text("Only admins can use this command.")
+        return None
+    return update.message.reply_to_message.from_user
 
 async def kick(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.args:
-        user_id = int(context.args[0])
-        await context.bot.ban_chat_member(update.effective_chat.id, user_id)
-        await context.bot.unban_chat_member(update.effective_chat.id, user_id)
-        await update.message.reply_text(f"User {user_id} has been kicked.")
+    user = await require_reply(update, context, "kick")
+    if user:
+        await context.bot.ban_chat_member(update.effective_chat.id, user.id)
+        await context.bot.unban_chat_member(update.effective_chat.id, user.id)
+        await update.message.reply_text(f"Kicked {user.full_name}")
 
 async def ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.args:
-        user_id = int(context.args[0])
-        await context.bot.ban_chat_member(update.effective_chat.id, user_id)
-        await update.message.reply_text(f"User {user_id} has been banned.")
+    user = await require_reply(update, context, "ban")
+    if user:
+        await context.bot.ban_chat_member(update.effective_chat.id, user.id)
+        await update.message.reply_text(f"Banned {user.full_name}")
 
 async def mute(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.args:
-        user_id = int(context.args[0])
-        until = datetime.utcnow() + timedelta(minutes=10)
+    user = await require_reply(update, context, "mute")
+    if user:
         await context.bot.restrict_chat_member(
             update.effective_chat.id,
-            user_id,
-            ChatPermissions(can_send_messages=False),
-            until_date=until
+            user.id,
+            permissions=ChatPermissions(can_send_messages=False),
         )
-        await update.message.reply_text(f"User {user_id} has been muted for 10 minutes.")
+        await update.message.reply_text(f"Muted {user.full_name}")
 
 async def promote(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.args:
-        user_id = int(context.args[0])
+    user = await require_reply(update, context, "promote")
+    if user:
         await context.bot.promote_chat_member(
             update.effective_chat.id,
-            user_id,
+            user.id,
             can_change_info=True,
             can_delete_messages=True,
             can_invite_users=True,
@@ -71,14 +83,14 @@ async def promote(update: Update, context: ContextTypes.DEFAULT_TYPE):
             can_pin_messages=True,
             can_promote_members=False,
         )
-        await update.message.reply_text(f"User {user_id} has been promoted.")
+        await update.message.reply_text(f"Promoted {user.full_name} to admin.")
 
 async def demote(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.args:
-        user_id = int(context.args[0])
+    user = await require_reply(update, context, "demote")
+    if user:
         await context.bot.promote_chat_member(
             update.effective_chat.id,
-            user_id,
+            user.id,
             can_change_info=False,
             can_delete_messages=False,
             can_invite_users=False,
@@ -86,44 +98,45 @@ async def demote(update: Update, context: ContextTypes.DEFAULT_TYPE):
             can_pin_messages=False,
             can_promote_members=False,
         )
-        await update.message.reply_text(f"User {user_id} has been demoted.")
+        await update.message.reply_text(f"Demoted {user.full_name}.")
+
+# === Periodic Announcement Function ===
 
 async def periodic_announcement(app):
-    pin_msg = None
     while True:
-        for chat_id in app.chat_ids:
-            text = get_announcement_text()
-            if pin_msg:
-                try:
-                    await app.bot.unpin_chat_message(chat_id, pin_msg.message_id)
-                    await app.bot.delete_message(chat_id, pin_msg.message_id)
-                except:
-                    pass
-            pin_msg = await app.bot.send_message(chat_id, text, parse_mode="Markdown")
-            await app.bot.pin_chat_message(chat_id, pin_msg.message_id, disable_notification=True)
+        for chat_id in list(app.chat_ids):
+            try:
+                msg = await app.bot.send_message(chat_id=chat_id, text=ANNOUNCEMENT_TEXT)
+                await msg.pin()
+                await asyncio.sleep(300)  # Keep it pinned for 5 minutes
+                await msg.unpin()
+                await msg.delete()
+                await asyncio.sleep(180)  # Wait 3 minutes before repeating
+            except Exception as e:
+                logger.warning(f"Failed in group {chat_id}: {e}")
 
-            await asyncio.sleep(repin_interval)
-            await app.bot.unpin_chat_message(chat_id, pin_msg.message_id)
-            await app.bot.pin_chat_message(chat_id, pin_msg.message_id, disable_notification=True)
-
-        await asyncio.sleep(announcement_interval)
+# === Track all group chat_ids ===
 
 async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    context.application.chat_ids.add(chat_id)
+    app = context.application
+    app.chat_ids.add(update.effective_chat.id)
+
+# === Main Function ===
 
 async def on_startup(app):
     app.chat_ids = set()
     app.create_task(periodic_announcement(app))
-    print("\u2705 Bot started and periodic announcements scheduled.")
 
 def main():
     token = os.getenv("BOT_TOKEN")
     if not token:
         raise RuntimeError("BOT_TOKEN not set")
 
-    app = ApplicationBuilder().token(token).post_init(on_startup).build()
+    app = ApplicationBuilder().token(token).build()
 
+    app.post_init = on_startup
+
+    # Register handlers
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome))
     app.add_handler(CommandHandler("rules", rules))
     app.add_handler(CommandHandler("help", help_command))
@@ -141,6 +154,6 @@ def main():
         webhook_url=f"https://cooperative-blondelle-saidali-0379e40c.koyeb.app/{token}"
     )
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
 
