@@ -1,7 +1,7 @@
 import logging
 import os
 import asyncio
-from telegram import Update, ChatPermissions, Message
+from telegram import Update, ChatPermissions
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     ContextTypes, filters
@@ -12,7 +12,6 @@ logger = logging.getLogger(__name__)
 
 active_groups = set()
 ANNOUNCEMENT_TEXT = "📢 This is a scheduled announcement."
-last_pinned_messages = {}
 
 # === Handler functions ===
 
@@ -118,40 +117,26 @@ async def demote(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             await update.message.reply_text(f"Failed to demote user: {e}")
 
-# Track active groups
+# Track any group the bot sees
 async def track_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
     active_groups.add(update.effective_chat.id)
 
-# Periodic announcement loop
+# Repeating announcement loop
 async def periodic_announcements(app):
     while True:
         for chat_id in list(active_groups):
             try:
-                # Delete old pinned message if available
-                if chat_id in last_pinned_messages:
-                    try:
-                        await app.bot.delete_message(chat_id, last_pinned_messages[chat_id])
-                    except Exception as e:
-                        logger.warning(f"Could not delete old message in {chat_id}: {e}")
-
-                # Send new message and pin it
-                msg: Message = await app.bot.send_message(chat_id, ANNOUNCEMENT_TEXT)
-                await msg.pin(disable_notification=True)
-                last_pinned_messages[chat_id] = msg.message_id
-
-                # Schedule deletion after 5 mins
-                asyncio.create_task(delete_after(app, msg, 300))
-
+                msg = await app.bot.send_message(chat_id=chat_id, text=ANNOUNCEMENT_TEXT)
+                await app.bot.pin_chat_message(chat_id=chat_id, message_id=msg.message_id, disable_notification=True)
+                await asyncio.sleep(300)  # Wait 5 minutes
+                await app.bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
+                await asyncio.sleep(180)  # Wait 3 minutes before next message
             except Exception as e:
-                logger.error(f"Error sending to {chat_id}: {e}")
-        await asyncio.sleep(480)  # wait 3 mins after 5-min delete (total 8 mins)
+                logger.error(f"Error in periodic announcement for {chat_id}: {e}")
 
-async def delete_after(app, msg: Message, delay: int):
-    await asyncio.sleep(delay)
-    try:
-        await app.bot.delete_message(msg.chat.id, msg.message_id)
-    except Exception as e:
-        logger.warning(f"Failed to delete message in {msg.chat.id}: {e}")
+# Async startup hook
+async def on_startup(app):
+    app.create_task(periodic_announcements(app))
 
 # === Main ===
 def main():
@@ -159,9 +144,8 @@ def main():
     if not token:
         raise RuntimeError("BOT_TOKEN not set in environment variables.")
 
-    app = ApplicationBuilder().token(token).build()
+    app = ApplicationBuilder().token(token).post_init(on_startup).build()
 
-    # Register handlers
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome))
     app.add_handler(CommandHandler("rules", rules))
     app.add_handler(CommandHandler("help", help_command))
@@ -171,8 +155,6 @@ def main():
     app.add_handler(CommandHandler("promote", promote))
     app.add_handler(CommandHandler("demote", demote))
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, track_groups))
-
-    app.post_init = lambda app: app.create_task(periodic_announcements(app))
 
     app.run_webhook(
         listen="0.0.0.0",
