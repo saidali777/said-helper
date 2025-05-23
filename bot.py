@@ -100,41 +100,36 @@ async def demote(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_text(f"Demoted {user.full_name}.")
 
-# === Periodic Announcement Function ===
-async def periodic_announcement(app):
-    while True:
-        for chat_id in list(app.chat_ids):
-            try:
-                # Send message and pin it immediately
-                msg = await app.bot.send_message(chat_id=chat_id, text=ANNOUNCEMENT_TEXT)
-                await msg.pin()
-
-                # Keep pinned for 5 minutes
-                await asyncio.sleep(300)
-
-                # Unpin and delete message
-                await msg.unpin()
-                await msg.delete()
-
-                # Wait 3 minutes before next announcement
-                await asyncio.sleep(180)
-
-            except Exception as e:
-                logger.warning(f"Failed in group {chat_id}: {e}")
-
 # === Track all group chat_ids ===
 
 async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     app = context.application
     app.chat_ids.add(update.effective_chat.id)
 
-# === Startup hook ===
+# === Periodic Announcement Function ===
+
+async def periodic_announcement(app):
+    while True:
+        for chat_id in list(app.chat_ids):
+            try:
+                msg = await app.bot.send_message(chat_id=chat_id, text=ANNOUNCEMENT_TEXT)
+                await msg.pin()
+                # Keep pinned for 5 minutes
+                await asyncio.sleep(300)
+                # Unpin and delete message
+                await msg.unpin()
+                await msg.delete()
+            except Exception as e:
+                logger.warning(f"Failed in group {chat_id}: {e}")
+
+        # Wait 3 minutes before sending again
+        await asyncio.sleep(180)
+
+# === On startup ===
 
 async def on_startup(app):
     app.chat_ids = set()
-    app.create_task(periodic_announcement(app))  # Create task after app fully starts
-
-# === Main function ===
+    app.create_task(periodic_announcement(app))
 
 def main():
     token = os.getenv("BOT_TOKEN")
