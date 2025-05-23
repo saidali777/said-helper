@@ -6,11 +6,10 @@ from telegram.ext import (
     filters, ContextTypes
 )
 
-# Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# === Handler Functions ===
+# === Handler functions ===
 
 async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for new_user in update.message.new_chat_members:
@@ -22,15 +21,16 @@ async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Group Rules:\n1. Be respectful\n2. No spam\n3. Follow Telegram TOS")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
+    help_text = (
         "/help - Show this message\n"
         "/rules - Show group rules\n"
         "/kick - Kick a user (reply only)\n"
         "/ban - Ban a user (reply only)\n"
         "/mute - Mute a user (reply only)\n"
-        "/promote - Promote to admin (reply only)\n"
+        "/promote - Promote user to admin (reply only)\n"
         "/demote - Demote admin (reply only)"
     )
+    await update.message.reply_text(help_text)
 
 async def is_admin(update: Update, user_id: int) -> bool:
     chat_admins = await update.effective_chat.get_administrators()
@@ -38,7 +38,7 @@ async def is_admin(update: Update, user_id: int) -> bool:
 
 async def require_reply(update, context, action_name):
     if not update.message.reply_to_message:
-        await update.message.reply_text(f"Reply to a user to use /{action_name}.")
+        await update.message.reply_text(f"Reply to a user's message to use /{action_name}.")
         return None
     if not await is_admin(update, update.message.from_user.id):
         await update.message.reply_text("Only admins can use this command.")
@@ -91,7 +91,7 @@ async def promote(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 can_pin_messages=True,
                 can_promote_members=False,
             )
-            await update.message.reply_text(f"Promoted {user.full_name}")
+            await update.message.reply_text(f"Promoted {user.full_name} to admin.")
         except Exception as e:
             await update.message.reply_text(f"Failed to promote user: {e}")
 
@@ -109,24 +109,21 @@ async def demote(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 can_pin_messages=False,
                 can_promote_members=False,
             )
-            await update.message.reply_text(f"Demoted {user.full_name}")
+            await update.message.reply_text(f"Demoted {user.full_name}.")
         except Exception as e:
             await update.message.reply_text(f"Failed to demote user: {e}")
 
-# Auto-pin admin announcements
+# === Auto-pin handler ===
 async def auto_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if "announcement" in update.message.text.lower():
-        if await is_admin(update, update.message.from_user.id):
-            try:
-                await context.bot.unpin_chat_message(chat_id=update.effective_chat.id)
-                await context.bot.pin_chat_message(
-                    chat_id=update.effective_chat.id,
-                    message_id=update.message.message_id
-                )
-            except Exception as e:
-                logger.error(f"Failed to auto-pin: {e}")
+    try:
+        user_id = update.message.from_user.id
+        chat_admins = await update.effective_chat.get_administrators()
+        if any(admin.user.id == user_id for admin in chat_admins):
+            await update.message.pin()
+    except Exception as e:
+        logger.error(f"Auto-pin error: {e}")
 
-# === Main Function ===
+# === Main ===
 def main():
     token = os.getenv("BOT_TOKEN")
     if not token:
@@ -144,7 +141,6 @@ def main():
     app.add_handler(CommandHandler("demote", demote))
     app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, auto_pin))
 
-    # Webhook for Koyeb
     app.run_webhook(
         listen="0.0.0.0",
         port=8000,
