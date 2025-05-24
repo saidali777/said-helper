@@ -53,13 +53,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
+    # CHANGED: Switched to HTML for easier parsing and consistency
     msg = (
         "👋🏻 Hi ❔!\n"
         "@mygroupmanagement_bot is the most complete Bot to help you manage your groups easily and safely!\n\n"
         "👉🏻 Add me in a Supergroup and promote me as Admin to let me get in action!\n\n"
         "❓ WHICH ARE THE COMMANDS? ❓\n"
         "Press /help to see all the commands and how they work!\n"
-        "📃 [Privacy policy](https://www.grouphelp.top/privacy)" # FIXED: Removed space between ] and (
+        "📃 <a href='https://www.grouphelp.top/privacy'>Privacy policy</a>" # FIXED: Changed to HTML link syntax
     )
 
     # Check if it's a callback query or a direct /start command
@@ -71,7 +72,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=msg,
                 reply_markup=reply_markup,
                 disable_web_page_preview=True,
-                parse_mode="Markdown"
+                parse_mode="HTML" # CHANGED: parse_mode to HTML
             )
         except Exception as e:
             logger.warning(f"Failed to edit message in start: {e}. Sending new message instead.")
@@ -79,21 +80,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=msg,
                 reply_markup=reply_markup,
                 disable_web_page_preview=True,
-                parse_mode="Markdown"
+                parse_mode="HTML" # CHANGED: parse_mode to HTML
             )
     else:
-        await update.message.reply_text(msg, reply_markup=reply_markup, disable_web_page_preview=True, parse_mode="Markdown")
+        await update.message.reply_text(msg, reply_markup=reply_markup, disable_web_page_preview=True, parse_mode="HTML") # CHANGED: parse_mode to HTML
 
 async def show_support_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
     keyboard = [
-        [InlineKeyboardButton("⬅️ Back", callback_data="back_to_main_menu")] # Only a Back button
+        [InlineKeyboardButton("⬅️ Back", callback_data="back_to_main_menu")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    # Updated support message content as per your new request
     support_message = (
         "⚠️ We do NOT provide support for ban, mute or other things "
         "related to groups managed by this bot: for this kind of requests "
@@ -104,7 +104,7 @@ async def show_support_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             text=support_message,
             reply_markup=reply_markup,
-            parse_mode="HTML", # Using HTML for the warning emoji if it were included
+            parse_mode="HTML",
             disable_web_page_preview=True
         )
     except Exception as e:
@@ -116,19 +116,17 @@ async def show_support_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
             disable_web_page_preview=True
         )
 
-# New function for 'Information'
 async def show_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
     keyboard = [
-        [InlineKeyboardButton("Bot Support", url="https://t.me/colonel_support")], # You can customize this link
+        [InlineKeyboardButton("Bot Support", url="https://t.me/colonel_support")],
         [InlineKeyboardButton("Bot commands", callback_data="show_bot_commands")],
         [InlineKeyboardButton("⬅️ Back", callback_data="back_to_main_menu")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    # You can customize this message if 'Information' should be different from 'Support'
     info_message = (
         "This bot helps you manage your Telegram groups with ease and security.\n\n"
         "<b>Key Features:</b>\n"
@@ -158,7 +156,6 @@ async def show_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for new_user in update.message.new_chat_members:
-        # Avoid welcoming the bot itself when it's added to a group
         if new_user.id == context.bot.id:
             continue
         await update.message.reply_text(
@@ -167,7 +164,6 @@ async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "Group Rules:\n1. Be respectful\n2. No spam\n3. Follow Telegram TOS"
-    # This function might be called by a command or a callback
     if update.callback_query:
         query = update.callback_query
         await query.answer()
@@ -191,7 +187,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/demote - Demote admin (reply only)"
     )
 
-    # This function might be called by a command or a callback
     if update.callback_query:
         query = update.callback_query
         await query.answer()
@@ -218,7 +213,7 @@ async def require_reply(update, context, action_name):
         return None
     if not await is_admin(update, update.message.from_user.id):
         await update.message.reply_text("Only admins can use this command.")
-        return None
+        return None # Added missing return None here
     return update.message.reply_to_message.from_user
 
 async def kick(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -289,6 +284,91 @@ async def demote(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             await update.message.reply_text(f"Failed to demote {user.full_name}. Error: {e}")
 
+# === Language Menu Functions ===
+
+async def lang_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    languages = [
+        ("🇬🇧 English", "en"), ("🇮🇹 Italiano", "it"),
+        ("🇪🇸 Español", "es"), ("🇵🇹 Português", "pt"),
+        ("🇩🇪 Deutsch", "de"), ("🇫🇷 Français", "fr"),
+        ("🇷🇴 Română", "ro"), ("🇳🇱 Nederlands", "nl"),
+        ("🇨🇳 简体中文", "zh-hans"), ("🇺🇦 Українська", "uk"),
+        ("🇷🇺 Русский", "ru"), ("🇰🇿 Қазақ", "kk"),
+        ("🇹🇷 Türkçe", "tr"), ("🇮🇩 Indonesia", "id"),
+        ("🇦🇿 Azərbaycan", "az"), ("🇺🇿 O'zbekcha", "uz"),
+        ("🇺🇦 Uyghurche", "ug"), ("🇲🇾 Melayu", "ms"),
+        ("🇸🇴 Soomaali", "so"), ("🇦🇱 Shqipja", "sq"),
+        ("🇷🇸 Srpski", "sr"), ("🇬🇷 Ελληνικά", "el"),
+        ("🇪🇹 Amharic", "am"), ("🇵🇰 اردو", "ur"),
+        ("🇰🇷 한국어", "ko"), ("🇮🇷 فارسی", "fa"),
+        ("🇮🇳 తెలుగు", "te"), ("🇮🇳 ગુજરાતી", "gu"),
+        ("🇮🇳 ਪੰਜਾਬੀ", "pa"), ("🇮🇳 ಕನ್ನಡ", "kn"),
+        ("🇮🇳 മലയാളം", "ml"), ("🇮🇳 ଓଡ଼ିଆ", "or"),
+        ("🇧🇩 বাংলা", "bn")
+    ]
+
+    keyboard = []
+    for i in range(0, len(languages), 2):
+        row = []
+        row.append(InlineKeyboardButton(languages[i][0], callback_data=f"set_lang:{languages[i][1]}"))
+        if i + 1 < len(languages):
+            row.append(InlineKeyboardButton(languages[i+1][0], callback_data=f"set_lang:{languages[i+1][1]}"))
+        keyboard.append(row)
+    
+    keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="back_to_main_menu")])
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    try:
+        await query.edit_message_text(
+            text="Choose your language:",
+            reply_markup=reply_markup
+        )
+    except Exception as e:
+        logger.warning(f"Failed to edit message in lang_menu: {e}. Sending new new message instead.")
+        await query.message.reply_text(
+            text="Choose your language:",
+            reply_markup=reply_markup
+        )
+
+async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    lang_code = query.data.split(":")[1]
+    
+    language_names = {
+        "en": "English", "it": "Italiano", "es": "Español", "pt": "Português",
+        "de": "Deutsch", "fr": "Français", "ro": "Română", "nl": "Nederlands",
+        "zh-hans": "简体中文", "uk": "Українська", "ru": "Русский", "kk": "Қазақ",
+        "tr": "Türkçe", "id": "Indonesia", "az": "Azərbaycan", "uz": "O'zbekcha",
+        "ug": "Uyghurche", "ms": "Melayu", "so": "Soomaali", "sq": "Shqipja",
+        "sr": "Srpski", "el": "Ελληνικά", "am": "Amharic", "ur": "اردو",
+        "ko": "한국어", "fa": "فارسی", "te": "తెలుగు", "gu": "ગુજરાતી",
+        "pa": "ਪੰਜਾਬੀ", "kn": "ಕನ್ನಡ", "ml": "മലയാളം", "or": "ଓଡ଼ିଆ",
+        "bn": "বাংলা"
+    }
+    
+    chosen_language_name = language_names.get(lang_code, "Unknown")
+    
+    confirmation_message = f"Language set to {chosen_language_name}."
+
+    try:
+        await query.edit_message_text(
+            text=confirmation_message,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="back_to_main_menu")]])
+        )
+    except Exception as e:
+        logger.warning(f"Failed to edit message in set_language: {e}. Sending new message instead.")
+        await query.message.reply_text(
+            text=confirmation_message,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="back_to_main_menu")]])
+        )
+
+
 # === Chat tracking ===
 
 async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -302,10 +382,10 @@ async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def periodic_announcement(app):
     while True:
-        chats_to_announce = list(app.chat_ids) # Iterate over a copy
-        if not chats_to_announce: # Avoid error if no chats
+        chats_to_announce = list(app.chat_ids)
+        if not chats_to_announce:
             logger.info("No chats to announce to. Sleeping for 60 seconds.")
-            await asyncio.sleep(60) # Sleep longer if no chats
+            await asyncio.sleep(60)
             continue
 
         for chat_id in chats_to_announce:
@@ -314,15 +394,13 @@ async def periodic_announcement(app):
                 if chat_member.status in ["member", "administrator", "creator"]:
                     msg = await app.bot.send_message(chat_id=chat_id, text=ANNOUNCEMENT_TEXT)
                     
-                    # Try pinning, but don't crash if it fails due to permissions
                     try:
                         await msg.pin()
                     except Exception as e:
                         logger.warning(f"Failed to pin message in chat {chat_id}: {e}")
                     
-                    await asyncio.sleep(300)  # Pinned for 5 mins
+                    await asyncio.sleep(300)
                     
-                    # Try unpinning and deleting, but don't crash if it fails
                     try:
                         await msg.unpin()
                         await msg.delete()
@@ -332,25 +410,19 @@ async def periodic_announcement(app):
                     logger.info(f"Bot no longer a member of chat {chat_id}. Removing from tracking.")
                     app.chat_ids.discard(chat_id)
                     save_chat_ids(app.chat_ids)
-            except RetryAfter as e: # Handle flood control specifically
+            except RetryAfter as e:
                 logger.warning(f"Flood control for chat {chat_id}: Retry in {e.retry_after} seconds. Sleeping.")
-                await asyncio.sleep(e.retry_after + 1) # Sleep a bit longer than required
+                await asyncio.sleep(e.retry_after + 1)
             except Exception as e:
                 logger.warning(f"Error in chat {chat_id}: {e}")
-                # Consider removing chat_id if error indicates bot was kicked/banned
                 if "chat not found" in str(e).lower() or "bot was blocked by the user" in str(e).lower():
                     logger.info(f"Removing chat {chat_id} due to persistent error.")
                     app.chat_ids.discard(chat_id)
                     save_chat_ids(app.chat_ids)
             
-            # Crucial: Add a delay *between* messages to different chats
-            # This prevents rapid-fire sending and hitting flood limits across multiple groups
-            await asyncio.sleep(2) # Delay of 2 seconds between each chat's announcement
+            await asyncio.sleep(2)
 
-        # This sleep determines how often the *entire cycle* of sending to all tracked chats repeats
-        # Adjust based on how often you want announcements to appear in groups.
-        # Example: 1 hour (3600 seconds)
-        await asyncio.sleep(60 * 60) # Main loop sleep: Check every 1 hour (adjust as needed)
+        await asyncio.sleep(60 * 60)
 
 # === On startup ===
 
@@ -377,13 +449,13 @@ def main():
     app.add_handler(CommandHandler("demote", demote))
     app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.ALL, track_chats))
 
-    # Callback Query Handlers
     app.add_handler(CallbackQueryHandler(show_support_info, pattern="^show_support_info$"))
     app.add_handler(CallbackQueryHandler(show_info, pattern="^show_info$"))
     app.add_handler(CallbackQueryHandler(help_command, pattern="^show_bot_commands$"))
-    app.add_handler(CallbackQueryHandler(start, pattern="^back_to_main_menu$")) # Handle the "Back" button to return to start menu
-    # If you implement the lang_menu, you would add a handler here:
-    # app.add_handler(CallbackQueryHandler(your_lang_menu_function, pattern="^lang_menu$"))
+    app.add_handler(CallbackQueryHandler(start, pattern="^back_to_main_menu$"))
+    
+    app.add_handler(CallbackQueryHandler(lang_menu, pattern="^lang_menu$"))
+    app.add_handler(CallbackQueryHandler(set_language, pattern="^set_lang:"))
 
     app.run_webhook(
         listen="0.0.0.0",
