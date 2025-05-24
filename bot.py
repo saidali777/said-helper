@@ -282,6 +282,7 @@ async def kick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user:
         try:
             await context.bot.ban_chat_member(update.effective_chat.id, user.id)
+            await context.bot.unban_chat_member(update.effective_chat.id, user.id)
             await update.message.reply_text(f"Kicked {user.full_name}")
         except Exception as e:
             await update.message.reply_text(f"Failed to kick {user.full_name}. Error: {e}")
@@ -530,27 +531,67 @@ async def show_group_settings(update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_doc = await chat_collection.find_one({"chat_id": chat_id})
     chat_title = chat_doc.get('chat_title', f"Unknown Chat ({chat_id})") if chat_doc else f"Unknown Chat ({chat_id})"
 
-    # Construct the buttons for the selected group's settings
+    # Construct the message text as per the image
+    settings_text = (
+        f"SETTINGS\n"
+        f"Group: ?, {chat_title} and GROUP MANAGER\n\n" # Placeholder "?" and static text as in image
+        f"Select one of the settings that you want to change."
+    )
+    
+    # Construct the buttons as per the image
     keyboard = [
-        [InlineKeyboardButton(f"Group: {chat_title}", callback_data="do_nothing")], # Current group name button
-        [InlineKeyboardButton("Settings menu sent in private chat", callback_data="do_nothing")], # Placeholder
-        [InlineKeyboardButton("Admin list updated", callback_data="do_nothing")], # Placeholder
-        [InlineKeyboardButton("Go to the chat", url=f"https://t.me/c/{str(chat_id).replace('-100', '')}/1")], # Link to chat (requires public link or message ID for deep link)
-        [InlineKeyboardButton("⬅️ Back to Group List", callback_data="back_to_settings_list")]
+        [
+            InlineKeyboardButton("Regulation", callback_data=f"setting_regulation:{chat_id}"),
+            InlineKeyboardButton("Anti-Spam", callback_data=f"setting_anti_spam:{chat_id}")
+        ],
+        [
+            InlineKeyboardButton("Welcome", callback_data=f"setting_welcome:{chat_id}"),
+            InlineKeyboardButton("Anti-Flood", callback_data=f"setting_anti_flood:{chat_id}")
+        ],
+        [
+            InlineKeyboardButton("Goodbye NEW", callback_data=f"setting_goodbye:{chat_id}"),
+            InlineKeyboardButton("Alphabets", callback_data=f"setting_alphabets:{chat_id}")
+        ],
+        [
+            InlineKeyboardButton("Captcha", callback_data=f"setting_captcha:{chat_id}"),
+            InlineKeyboardButton("Checks NEW", callback_data=f"setting_checks:{chat_id}")
+        ],
+        [
+            InlineKeyboardButton("SOS @Admin", callback_data=f"setting_sos_admin:{chat_id}"),
+            InlineKeyboardButton("Blocks", callback_data=f"setting_blocks:{chat_id}")
+        ],
+        [
+            InlineKeyboardButton("Media", callback_data=f"setting_media:{chat_id}"),
+            InlineKeyboardButton("Porn", callback_data=f"setting_porn:{chat_id}")
+        ],
+        [
+            InlineKeyboardButton("Warns", callback_data=f"setting_warns:{chat_id}"),
+            InlineKeyboardButton("Night", callback_data=f"setting_night:{chat_id}")
+        ],
+        [
+            InlineKeyboardButton("Tag", callback_data=f"setting_tag:{chat_id}"),
+            InlineKeyboardButton("Link", callback_data=f"setting_link:{chat_id}")
+        ],
+        [InlineKeyboardButton("Approval mode", callback_data=f"setting_approval_mode:{chat_id}")],
+        [InlineKeyboardButton("Deleting Messages", callback_data=f"setting_deleting_messages:{chat_id}")],
+        [
+            InlineKeyboardButton("Lang", callback_data=f"setting_lang:{chat_id}"), # Callback to handle group-specific language
+            InlineKeyboardButton("✅ Close", callback_data="back_to_settings_list"), # Close goes back to group list
+            InlineKeyboardButton("▶️ Other", callback_data=f"setting_other:{chat_id}")
+        ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    settings_text = f"⚙️ Group Settings for <b>{chat_title}</b>"
-    
     try:
         await query.edit_message_text(
             text=settings_text,
             reply_markup=reply_markup,
-            parse_mode="HTML",
+            parse_mode="HTML", # Use HTML for general text formatting, though not strictly needed here
             disable_web_page_preview=True
         )
     except Exception as e:
         logger.error(f"Error editing message for group settings: {e}")
+        # Fallback to sending a new message if editing fails (e.g., message too old)
         await query.message.reply_text(
             text=settings_text,
             reply_markup=reply_markup,
