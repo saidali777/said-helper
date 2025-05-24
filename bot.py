@@ -444,42 +444,44 @@ async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await add_chat_id_to_mongo(chat_id)
 
 
-# === Periodic Announcement ===
-
+# --- Periodic Announcement ---
+# Modified to run immediately and continuously after deletion.
 async def periodic_announcement(app):
-    first_run = True
     while True:
-        if not first_run:
-            await asyncio.sleep(60 * 60) # Wait for 1 hour after the first run
-        first_run = False
-
-        # Fetch chats from MongoDB directly
         chats_to_announce = list(await get_all_chat_ids_from_mongo())
         
         if not chats_to_announce:
-            logger.info("No chats to announce to. Sleeping for 60 seconds.")
-            await asyncio.sleep(60)
-            continue
+            # If no chats, log this info and wait for a short period before checking again
+            # This prevents a tight loop that would hammer the database/CPU.
+            logger.info("No chats to announce to. Waiting before next check (10 seconds).")
+            await asyncio.sleep(10) # Wait 10 seconds before re-checking for chats
+            continue # Continue to the next iteration of the while loop
 
         for chat_id in chats_to_announce:
+            msg = None # Initialize msg to None
             try:
                 chat_member = await app.bot.get_chat_member(chat_id=chat_id, user_id=app.bot.id)
                 if chat_member.status in ["member", "administrator", "creator"]:
+                    # 1. Send the message
                     msg = await app.bot.send_message(chat_id=chat_id, text=ANNOUNCEMENT_TEXT)
                     logger.info(f"Sent announcement to chat {chat_id}.")
                     
+                    # 2. Pin the message
                     try:
                         await msg.pin()
                         logger.info(f"Pinned message in chat {chat_id}.")
                     except Exception as e:
                         logger.warning(f"Failed to pin message in chat {chat_id}: {e}")
                     
-                    await asyncio.sleep(300)
+                    # 3. Wait for 5 minutes
+                    await asyncio.sleep(5 * 60) # Wait for 5 minutes (300 seconds)
                     
+                    # 4. Unpin and delete the message
                     try:
-                        await msg.unpin()
-                        await msg.delete()
-                        logger.info(f"Unpinned and deleted message in chat {chat_id}.")
+                        if msg: # Ensure msg object exists before trying to unpin/delete
+                            await msg.unpin()
+                            await msg.delete()
+                            logger.info(f"Unpinned and deleted message in chat {chat_id}.")
                     except Exception as e:
                         logger.warning(f"Failed to unpin/delete message in chat {chat_id}: {e}")
                 else:
@@ -496,62 +498,19 @@ async def periodic_announcement(app):
                     await remove_chat_id_from_mongo(chat_id) # Remove from MongoDB
                 # Add specific handling for other persistent errors if needed
             
-            await asyncio.sleep(2) # Delay between messages to different chats
+            # This delay is between sending to different chats within one cycle.
+            # Keep it to avoid hitting Telegram's API limits too quickly across multiple chats.
+            await asyncio.sleep(2) 
 
-# === On startup / On shutdown ===
+        # The loop will immediately restart after processing all chats in the list.
+        # This achieves the "repeat suddenly without any time lag" part for the overall cycle.
+        # However, the 5-minute wait for message deletion is per message.
+        # If you truly want *no* lag, you'd need to send, pin, and delete messages
+        # for ALL chats *simultaneously* and then wait for the *longest* 5-min
+        # deletion to complete. This is complex and usually not necessary.
+        # The current implementation will process chat_id by chat_id, with a 2-sec
+        # delay between each, and each message will live for 5 minutes.
 
-async def on_startup(app):
-    await init_mongo_client() # Initialize MongoDB client
-    app.create_task(periodic_announcement(app))
-
-async def on_shutdown(app):
-    if mongo_client:
-        mongo_client.close() # Close MongoDB client connection
-    logger.info("MongoDB client closed.")
-
-def main():
-    token = os.getenv("BOT_TOKEN")
-    if not token:
-        raise RuntimeError("BOT_TOKEN not set")
-
-    port = int(os.environ.get("PORT", 8000))
-    app = ApplicationBuilder().token(token).post_init(on_startup).post_shutdown(on_shutdown).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome)) 
-    app.add_handler(CommandHandler("rules", rules))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("kick", kick))
-    app.add_handler(CommandHandler("ban", ban))
-    app.add_handler(CommandHandler("mute", mute))
-    app.add_handler(CommandHandler("promote", promote))
-    app.add_handler(CommandHandler("demote", demote))
-    
-    # This handler ensures any group the bot interacts with (by message) is tracked.
-    # The 'welcome' handler specifically tracks when the bot *joins* a group.
-    app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.ALL, track_chats)) 
-
-    app.add_handler(CallbackQueryHandler(show_support_info, pattern="^show_support_info$"))
-    app.add_handler(CallbackQueryHandler(show_info, pattern="^show_info$"))
-    app.add_handler(CallbackQueryHandler(help_command, pattern="^show_bot_commands$"))
-    app.add_handler(CallbackQueryHandler(start, pattern="^back_to_main_menu$"))
-    
-    app.add_handler(CallbackQueryHandler(lang_menu, pattern="^lang_menu$"))
-    app.add_handler(CallbackQueryHandler(set_language, pattern="^set_lang:"))
-
-    webhook_url_from_env = os.getenv("WEBHOOK_URL") 
-    logger.info(f"WEBHOOK_URL read from environment: {webhook_url_from_env}")
-    
-    if not webhook_url_from_env:
-        raise RuntimeError("WEBHOOK_URL environment variable not set or invalid.")
-
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=port,
-        url_path=token,
-        webhook_url=webhook_url_from_env
-    )
-
-if __name__ == "__main__":
-    main()
-
+        # If you want to force a pause *after* processing all chats and *before*
+        # fetching the list again, you could add a sleep here.
+        # Example: await asyncio.sleep(5) # Wait 5 seconds after completing one full round
