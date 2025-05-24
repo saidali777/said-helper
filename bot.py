@@ -506,7 +506,7 @@ async def on_startup(app):
 async def on_shutdown(app):
     if mongo_client:
         mongo_client.close() # Close MongoDB client connection
-        logger.info("MongoDB client closed.")
+    logger.info("MongoDB client closed.")
 
 def main():
     token = os.getenv("BOT_TOKEN")
@@ -538,11 +538,18 @@ def main():
     app.add_handler(CallbackQueryHandler(lang_menu, pattern="^lang_menu$"))
     app.add_handler(CallbackQueryHandler(set_language, pattern="^set_lang:"))
 
+    # CORRECTED LINE HERE
+    webhook_url_from_env = os.getenv("WEBHOOK_URL") # This reads the environment variable named "WEBHOOK_URL"
+    logger.info(f"WEBHOOK_URL read from environment: {webhook_url_from_env}") # Debug print statement
+    
+    if not webhook_url_from_env:
+        raise RuntimeError("WEBHOOK_URL environment variable not set or invalid.")
+
     app.run_webhook(
         listen="0.0.0.0",
         port=port,
         url_path=token,
-        webhook_url=os.getenv("https://cooperative-blondelle-saidali-0379e40c.koyeb.app/") 
+        webhook_url=webhook_url_from_env # Pass the *value* of the environment variable
     )
 
 if __name__ == "__main__":
