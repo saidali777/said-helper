@@ -66,7 +66,7 @@ async def add_chat_id_to_mongo(chat_id: int, chat_title: str = None):
     try:
         result = await chat_collection.update_one(
             {"chat_id": chat_id},
-            {"$set": {"chat_id": chat_id, "chat_title": chat_title}},
+            {"$set": {"chat_id": chat_id, "chat_title": chat_title}}, # Store the chat_id and title
             upsert=True
         )
         if result.upserted_id:
@@ -236,7 +236,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/help - Show this message\n"
         "/rules - Show group rules\n"
         "/settings - Manage group settings (private chat only)\n"
-        "/reload - Restart the bot (admin only in groups)\n" # Added /reload to help
+        "/reload - Restart the bot (admin only in groups)\n"
         "/kick - Kick a user (reply only)\n"
         "/ban - Ban a user (reply only)\n"
         "/mute - Mute a user (reply only)\n"
@@ -258,6 +258,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def is_admin(update: Update, user_id: int) -> bool:
     try:
+        # If update.effective_chat is None (e.g., in a private chat context where this function is called),
+        # then we can't get administrators.
+        if update.effective_chat is None:
+            return False
+        
         chat_admins = await update.effective_chat.get_administrators()
         return any(admin.user.id == user_id for admin in chat_admins)
     except Exception as e:
@@ -277,7 +282,6 @@ async def kick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user:
         try:
             await context.bot.ban_chat_member(update.effective_chat.id, user.id)
-            await context.bot.unban_chat_member(update.effective_chat.id, user.id)
             await update.message.reply_text(f"Kicked {user.full_name}")
         except Exception as e:
             await update.message.reply_text(f"Failed to kick {user.full_name}. Error: {e}")
@@ -446,7 +450,7 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     keyboard = []
-    # Fetch all chat IDs from the database
+    # Fetch all chat IDs and titles from the database
     all_tracked_chats = await chat_collection.find().to_list(length=None)
 
     for chat_doc in all_tracked_chats:
@@ -458,6 +462,9 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             bot_member = await context.bot.get_chat_member(chat_id=chat_id, user_id=context.bot.id)
             if bot_member.status in ["member", "administrator", "creator"]:
                 # Check if the user is an admin in that group
+                # When checking for admin in the settings command (private chat),
+                # we don't have effective_chat directly from the update.
+                # So we must use context.bot.get_chat_administrators(chat_id)
                 chat_admins = await context.bot.get_chat_administrators(chat_id)
                 if any(admin.user.id == user_id for admin in chat_admins):
                     keyboard.append([InlineKeyboardButton(chat_title, callback_data=f"group_settings:{chat_id}")])
@@ -470,7 +477,7 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.warning(f"Could not retrieve chat info for {chat_id} ('{chat_title}'): {e}")
             # Optionally, remove chat if it consistently fails
-            # await remove_chat_id_from_mongo(chat_id)
+            # await remove_chat_id_from_mongo(chat_id) # Consider removing if errors persist
 
     if not keyboard:
         settings_message += "\n\n<i>No groups found where you are an administrator and the bot is present.</i>"
@@ -511,6 +518,7 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 disable_web_page_preview=True
             )
 
+
 async def show_group_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -518,17 +526,22 @@ async def show_group_settings(update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_id_str = query.data.split(":")[1]
     chat_id = int(chat_id_str)
 
+    # Fetch chat title from the database
     chat_doc = await chat_collection.find_one({"chat_id": chat_id})
     chat_title = chat_doc.get('chat_title', f"Unknown Chat ({chat_id})") if chat_doc else f"Unknown Chat ({chat_id})"
 
-    settings_text = f"⚙️ Settings for group: <b>{chat_title}</b>\n\n" \
-                    f"<i>(Further settings options will be implemented here, e.g., welcome message, rules, etc.)</i>"
-    
+    # Construct the buttons for the selected group's settings
     keyboard = [
+        [InlineKeyboardButton(f"Group: {chat_title}", callback_data="do_nothing")], # Current group name button
+        [InlineKeyboardButton("Settings menu sent in private chat", callback_data="do_nothing")], # Placeholder
+        [InlineKeyboardButton("Admin list updated", callback_data="do_nothing")], # Placeholder
+        [InlineKeyboardButton("Go to the chat", url=f"https://t.me/c/{str(chat_id).replace('-100', '')}/1")], # Link to chat (requires public link or message ID for deep link)
         [InlineKeyboardButton("⬅️ Back to Group List", callback_data="back_to_settings_list")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
+    settings_text = f"⚙️ Group Settings for <b>{chat_title}</b>"
+    
     try:
         await query.edit_message_text(
             text=settings_text,
@@ -555,8 +568,6 @@ async def reload_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if await is_admin(update, user_id):
             await update.message.reply_text("🔄 Bot is restarting... Please wait a moment.")
             logger.info(f"Bot restart requested by admin {user_id} in chat {chat_id}. Exiting for restart.")
-            # This will terminate the current Python process.
-            # Your process manager (e.g., systemd, Supervisor) should automatically restart it.
             sys.exit(0) # Exit with a success code
         else:
             await update.message.reply_text("🚫 Only administrators can use the /reload command in groups.")
@@ -662,7 +673,7 @@ def main():
     app.add_handler(CommandHandler("demote", demote))
     
     app.add_handler(CommandHandler("settings", settings_command))
-    app.add_handler(CommandHandler("reload", reload_command)) # Add the new reload command handler
+    app.add_handler(CommandHandler("reload", reload_command))
     
     app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.ALL, track_chats))    
 
