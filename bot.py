@@ -31,7 +31,7 @@ chat_collection = None # This will store the reference to your 'chats' collectio
 
 async def init_mongo_client():
     global mongo_client, chat_collection
-    mongodb_url = os.getenv("mongodbe+srv://samanthasaintf0:samanthasaintf0@cluster0.6fe2s.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
+    mongodb_url = os.getenv("mongodb+srv://nadimkhantelegram:uLMxrqaZslnWeP6r@cluster0.bdxig.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
     if not mongodb_url:
         raise RuntimeError("MONGODB_URL environment variable not set.")
     
