@@ -534,7 +534,7 @@ async def show_group_settings(update: Update, context: ContextTypes.DEFAULT_TYPE
     # Construct the message text as per the image
     settings_text = (
         f"SETTINGS\n"
-        f"Group: ?, {chat_title} and GROUP MANAGER\n\n" # Placeholder "?" and static text as in image
+        f"Group:  {chat_title} \n\n" # Placeholder  and static text as in image
         f"Select one of the settings that you want to change."
     )
     
