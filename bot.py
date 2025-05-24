@@ -54,7 +54,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = (
         "👋🏻 Hi ❔!\n"
-        "@mygroupmanagement_bot is the most complete Bot to help you manage your groups easily and safely!\n\n"
+        "@GroupHelpBot is the most complete Bot to help you manage your groups easily and safely!\n\n"
         "👉🏻 Add me in a Supergroup and promote me as Admin to let me get in action!\n\n"
         "❓ WHICH ARE THE COMMANDS? ❓\n"
         "Press /help to see all the commands and how they work!\n"
@@ -121,7 +121,7 @@ async def show_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     keyboard = [
-        [InlineKeyboardButton("Bot Support", url="https://t.me/colonel_support")], # You can customize this link
+        [InlineKeyboardButton("Bot Support", url="https://t.me/YourSupportLinkActual")], # You can customize this link
         [InlineKeyboardButton("Bot commands", callback_data="show_bot_commands")],
         [InlineKeyboardButton("⬅️ Back", callback_data="back_to_main_menu")]
     ]
@@ -370,5 +370,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
