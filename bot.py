@@ -53,17 +53,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    # CHANGED: Switched to HTML for easier parsing and consistency
     msg = (
         "👋🏻 Hi ❔!\n"
         "@mygroupmanagement_bot is the most complete Bot to help you manage your groups easily and safely!\n\n"
         "👉🏻 Add me in a Supergroup and promote me as Admin to let me get in action!\n\n"
         "❓ WHICH ARE THE COMMANDS? ❓\n"
         "Press /help to see all the commands and how they work!\n"
-        "📃 <a href='https://www.grouphelp.top/privacy'>Privacy policy</a>" # FIXED: Changed to HTML link syntax
+        "📃 <a href='https://www.grouphelp.top/privacy'>Privacy policy</a>"
     )
 
-    # Check if it's a callback query or a direct /start command
     if update.callback_query:
         query = update.callback_query
         await query.answer()
@@ -72,7 +70,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=msg,
                 reply_markup=reply_markup,
                 disable_web_page_preview=True,
-                parse_mode="HTML" # CHANGED: parse_mode to HTML
+                parse_mode="HTML"
             )
         except Exception as e:
             logger.warning(f"Failed to edit message in start: {e}. Sending new message instead.")
@@ -80,10 +78,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=msg,
                 reply_markup=reply_markup,
                 disable_web_page_preview=True,
-                parse_mode="HTML" # CHANGED: parse_mode to HTML
+                parse_mode="HTML"
             )
     else:
-        await update.message.reply_text(msg, reply_markup=reply_markup, disable_web_page_preview=True, parse_mode="HTML") # CHANGED: parse_mode to HTML
+        await update.message.reply_text(msg, reply_markup=reply_markup, disable_web_page_preview=True, parse_mode="HTML")
 
 async def show_support_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -213,7 +211,7 @@ async def require_reply(update, context, action_name):
         return None
     if not await is_admin(update, update.message.from_user.id):
         await update.message.reply_text("Only admins can use this command.")
-        return None # Added missing return None here
+        return None
     return update.message.reply_to_message.from_user
 
 async def kick(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -347,7 +345,7 @@ async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "tr": "Türkçe", "id": "Indonesia", "az": "Azərbaycan", "uz": "O'zbekcha",
         "ug": "Uyghurche", "ms": "Melayu", "so": "Soomaali", "sq": "Shqipja",
         "sr": "Srpski", "el": "Ελληνικά", "am": "Amharic", "ur": "اردو",
-        "ko": "한국어", "fa": "فارسی", "te": "తెలుగు", "gu": "ગુજરાતી",
+        "ko": "한국어", "fa": "فارसी", "te": "తెలుగు", "gu": "ગુજરાતી",
         "pa": "ਪੰਜਾਬੀ", "kn": "ಕನ್ನಡ", "ml": "മലയാളം", "or": "ଓଡ଼ିଆ",
         "bn": "বাংলা"
     }
@@ -377,52 +375,64 @@ async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id not in app.chat_ids:
         app.chat_ids.add(chat_id)
         save_chat_ids(app.chat_ids)
+        logger.info(f"New chat {chat_id} added and saved.") # Log when a new chat is added
 
 # === Periodic Announcement ===
 
 async def periodic_announcement(app):
+    first_run = True # Flag to control the initial sleep
     while True:
-        chats_to_announce = list(app.chat_ids)
-        if not chats_to_announce:
+        if not first_run:
+            # Only sleep for the full interval AFTER the first run
+            await asyncio.sleep(60 * 60) # Main loop sleep: Check every 1 hour (adjust as needed)
+        first_run = False # After the first potential execution, set to False
+
+        chats_to_announce = list(app.chat_ids) # Iterate over a copy
+        if not chats_to_announce: # Avoid error if no chats
             logger.info("No chats to announce to. Sleeping for 60 seconds.")
-            await asyncio.sleep(60)
-            continue
+            await asyncio.sleep(60) # Sleep shorter if no chats, then re-check
+            continue # Continue to the next iteration (which will now wait for 1 hour if chats are added)
 
         for chat_id in chats_to_announce:
             try:
                 chat_member = await app.bot.get_chat_member(chat_id=chat_id, user_id=app.bot.id)
                 if chat_member.status in ["member", "administrator", "creator"]:
                     msg = await app.bot.send_message(chat_id=chat_id, text=ANNOUNCEMENT_TEXT)
+                    logger.info(f"Sent announcement to chat {chat_id}.")
                     
+                    # Try pinning, but don't crash if it fails due to permissions
                     try:
                         await msg.pin()
+                        logger.info(f"Pinned message in chat {chat_id}.")
                     except Exception as e:
                         logger.warning(f"Failed to pin message in chat {chat_id}: {e}")
                     
-                    await asyncio.sleep(300)
+                    await asyncio.sleep(300)  # Pinned for 5 mins
                     
+                    # Try unpinning and deleting, but don't crash if it fails
                     try:
                         await msg.unpin()
                         await msg.delete()
+                        logger.info(f"Unpinned and deleted message in chat {chat_id}.")
                     except Exception as e:
                         logger.warning(f"Failed to unpin/delete message in chat {chat_id}: {e}")
                 else:
                     logger.info(f"Bot no longer a member of chat {chat_id}. Removing from tracking.")
                     app.chat_ids.discard(chat_id)
                     save_chat_ids(app.chat_ids)
-            except RetryAfter as e:
+            except RetryAfter as e: # Handle flood control specifically
                 logger.warning(f"Flood control for chat {chat_id}: Retry in {e.retry_after} seconds. Sleeping.")
-                await asyncio.sleep(e.retry_after + 1)
+                await asyncio.sleep(e.retry_after + 1) # Sleep a bit longer than required
             except Exception as e:
                 logger.warning(f"Error in chat {chat_id}: {e}")
+                # Consider removing chat_id if error indicates bot was kicked/banned
                 if "chat not found" in str(e).lower() or "bot was blocked by the user" in str(e).lower():
                     logger.info(f"Removing chat {chat_id} due to persistent error.")
                     app.chat_ids.discard(chat_id)
                     save_chat_ids(app.chat_ids)
             
-            await asyncio.sleep(2)
-
-        await asyncio.sleep(60 * 60)
+            # Crucial: Add a delay *between* messages to different chats
+            await asyncio.sleep(2) # Delay of 2 seconds between each chat's announcement
 
 # === On startup ===
 
