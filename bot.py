@@ -1,8 +1,6 @@
 import logging
 import os
 import json
-import asyncio
-import asyncpg # New import for PostgreSQL
 from telegram import (
     Update,
     ChatPermissions,
