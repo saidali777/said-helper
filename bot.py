@@ -2,6 +2,7 @@ import logging
 import os
 import json
 import asyncio
+import motor.motor_asyncio # Correct import for MongoDB
 from telegram import (
     Update,
     ChatPermissions,
@@ -16,25 +17,87 @@ from telegram.ext import (
     ContextTypes,
     filters
 )
-from telegram.error import RetryAfter # Import RetryAfter for flood control handling
+from telegram.error import RetryAfter
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 ANNOUNCEMENT_TEXT = "📢 This is a recurring announcement."
-DATA_FILE = "chat_ids.json"
 
-# === Load/Save Chat IDs ===
+# --- MongoDB Client and Collection ---
+# Global variable to hold the MongoDB client and collection reference
+mongo_client = None
+chat_collection = None # This will store the reference to your 'chats' collection
 
-def load_chat_ids():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r") as f:
-            return set(json.load(f))
-    return set()
+async def init_mongo_client():
+    global mongo_client, chat_collection
+    mongodb_url = os.getenv("MONGODB_URL")
+    if not mongodb_url:
+        raise RuntimeError("MONGODB_URL environment variable not set.")
+    
+    logger.info("Attempting to connect to MongoDB...")
+    try:
+        mongo_client = motor.motor_asyncio.AsyncIOMotorClient(mongodb_url)
+        
+        # You can choose your database name here (e.g., 'telegram_bot_db')
+        # The database will be created automatically if it doesn't exist
+        db = mongo_client.get_database("telegram_bot_db") 
+        # This will be your collection name for chat IDs
+        # The collection will be created automatically if it doesn't exist
+        chat_collection = db.get_collection("chat_ids") 
+        
+        logger.info("MongoDB client and collection initialized.")
 
-def save_chat_ids(chat_ids):
-    with open(DATA_FILE, "w") as f:
-        json.dump(list(chat_ids), f)
+        # You might want to create an index for chat_id to ensure uniqueness and speed up lookups
+        # This will prevent duplicate chat_ids from being inserted and speed up checks
+        await chat_collection.create_index("chat_id", unique=True)
+        logger.info("MongoDB index on 'chat_id' created/ensured.")
+    except Exception as e:
+        logger.error(f"Failed to connect to MongoDB or initialize collection: {e}")
+        raise # Re-raise the exception to stop startup if DB connection fails
+
+
+# --- MongoDB Interaction Functions ---
+
+async def get_all_chat_ids_from_mongo():
+    """Fetches all chat IDs from the MongoDB collection."""
+    chat_ids = set()
+    try:
+        # Fetch all documents, and from each, get the 'chat_id' field
+        async for doc in chat_collection.find({}, {"chat_id": 1}): # Only project chat_id
+            if 'chat_id' in doc:
+                chat_ids.add(doc['chat_id'])
+        logger.debug(f"Fetched {len(chat_ids)} chat IDs from MongoDB.")
+    except Exception as e:
+        logger.error(f"Failed to fetch chat IDs from MongoDB: {e}")
+    return chat_ids
+
+async def add_chat_id_to_mongo(chat_id: int):
+    """Adds a chat ID to the MongoDB collection if it doesn't already exist."""
+    try:
+        # Use update_one with upsert=True to insert if not exists, or do nothing if it does
+        result = await chat_collection.update_one(
+            {"chat_id": chat_id},
+            {"$set": {"chat_id": chat_id}}, # Store the chat_id
+            upsert=True
+        )
+        if result.upserted_id:
+            logger.info(f"Chat ID {chat_id} added to MongoDB.")
+        else:
+            logger.debug(f"Chat ID {chat_id} already exists in MongoDB.")
+    except Exception as e:
+        logger.error(f"Failed to add chat ID {chat_id} to MongoDB: {e}")
+
+async def remove_chat_id_from_mongo(chat_id: int):
+    """Removes a chat ID from the MongoDB collection."""
+    try:
+        result = await chat_collection.delete_one({"chat_id": chat_id})
+        if result.deleted_count > 0:
+            logger.info(f"Chat ID {chat_id} removed from MongoDB.")
+        else:
+            logger.debug(f"Chat ID {chat_id} not found in MongoDB for deletion.")
+    except Exception as e:
+        logger.error(f"Failed to remove chat ID {chat_id} from MongoDB: {e}")
 
 # === Handler functions ===
 
@@ -53,17 +116,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    # CHANGED: Switched to HTML for easier parsing and consistency
     msg = (
         "👋🏻 Hi ❔!\n"
         "@mygroupmanagement_bot is the most complete Bot to help you manage your groups easily and safely!\n\n"
         "👉🏻 Add me in a Supergroup and promote me as Admin to let me get in action!\n\n"
         "❓ WHICH ARE THE COMMANDS? ❓\n"
         "Press /help to see all the commands and how they work!\n"
-        "📃 <a href='https://www.grouphelp.top/privacy'>Privacy policy</a>" # FIXED: Changed to HTML link syntax
+        "📃 <a href='https://www.grouphelp.top/privacy'>Privacy policy</a>"
     )
 
-    # Check if it's a callback query or a direct /start command
     if update.callback_query:
         query = update.callback_query
         await query.answer()
@@ -72,7 +133,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=msg,
                 reply_markup=reply_markup,
                 disable_web_page_preview=True,
-                parse_mode="HTML" # CHANGED: parse_mode to HTML
+                parse_mode="HTML"
             )
         except Exception as e:
             logger.warning(f"Failed to edit message in start: {e}. Sending new message instead.")
@@ -80,10 +141,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=msg,
                 reply_markup=reply_markup,
                 disable_web_page_preview=True,
-                parse_mode="HTML" # CHANGED: parse_mode to HTML
+                parse_mode="HTML"
             )
     else:
-        await update.message.reply_text(msg, reply_markup=reply_markup, disable_web_page_preview=True, parse_mode="HTML") # CHANGED: parse_mode to HTML
+        await update.message.reply_text(msg, reply_markup=reply_markup, disable_web_page_preview=True, parse_mode="HTML")
 
 async def show_support_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -157,10 +218,15 @@ async def show_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for new_user in update.message.new_chat_members:
         if new_user.id == context.bot.id:
-            continue
-        await update.message.reply_text(
-            f"Welcome, {new_user.full_name}! Please read /rules before chatting."
-        )
+            # Bot itself was added to the group
+            chat_id = update.effective_chat.id
+            await add_chat_id_to_mongo(chat_id) # Add group to MongoDB when bot joins
+            await update.message.reply_text(f"Hello everyone! Thanks for adding me to {update.effective_chat.title}. I'm here to help manage this group. Please make me an admin so I can function properly!")
+        else:
+            # A regular user joined
+            await update.message.reply_text(
+                f"Welcome, {new_user.full_name}! Please read /rules before chatting."
+            )
 
 async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "Group Rules:\n1. Be respectful\n2. No spam\n3. Follow Telegram TOS"
@@ -213,7 +279,7 @@ async def require_reply(update, context, action_name):
         return None
     if not await is_admin(update, update.message.from_user.id):
         await update.message.reply_text("Only admins can use this command.")
-        return None # Added missing return None here
+        return None
     return update.message.reply_to_message.from_user
 
 async def kick(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -370,19 +436,25 @@ async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # === Chat tracking ===
-
+# This handler now directly interacts with MongoDB
 async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    app = context.application
     chat_id = update.effective_chat.id
-    if chat_id not in app.chat_ids:
-        app.chat_ids.add(chat_id)
-        save_chat_ids(app.chat_ids)
+    # When any message comes from a group, ensure it's tracked
+    await add_chat_id_to_mongo(chat_id)
+
 
 # === Periodic Announcement ===
 
 async def periodic_announcement(app):
+    first_run = True
     while True:
-        chats_to_announce = list(app.chat_ids)
+        if not first_run:
+            await asyncio.sleep(60 * 60) # Wait for 1 hour after the first run
+        first_run = False
+
+        # Fetch chats from MongoDB directly
+        chats_to_announce = list(await get_all_chat_ids_from_mongo())
+        
         if not chats_to_announce:
             logger.info("No chats to announce to. Sleeping for 60 seconds.")
             await asyncio.sleep(60)
@@ -393,9 +465,11 @@ async def periodic_announcement(app):
                 chat_member = await app.bot.get_chat_member(chat_id=chat_id, user_id=app.bot.id)
                 if chat_member.status in ["member", "administrator", "creator"]:
                     msg = await app.bot.send_message(chat_id=chat_id, text=ANNOUNCEMENT_TEXT)
+                    logger.info(f"Sent announcement to chat {chat_id}.")
                     
                     try:
                         await msg.pin()
+                        logger.info(f"Pinned message in chat {chat_id}.")
                     except Exception as e:
                         logger.warning(f"Failed to pin message in chat {chat_id}: {e}")
                     
@@ -404,31 +478,35 @@ async def periodic_announcement(app):
                     try:
                         await msg.unpin()
                         await msg.delete()
+                        logger.info(f"Unpinned and deleted message in chat {chat_id}.")
                     except Exception as e:
                         logger.warning(f"Failed to unpin/delete message in chat {chat_id}: {e}")
                 else:
-                    logger.info(f"Bot no longer a member of chat {chat_id}. Removing from tracking.")
-                    app.chat_ids.discard(chat_id)
-                    save_chat_ids(app.chat_ids)
+                    logger.info(f"Bot no longer a member of chat {chat_id}. Removing from MongoDB tracking.")
+                    await remove_chat_id_from_mongo(chat_id) # Remove from MongoDB
             except RetryAfter as e:
                 logger.warning(f"Flood control for chat {chat_id}: Retry in {e.retry_after} seconds. Sleeping.")
                 await asyncio.sleep(e.retry_after + 1)
             except Exception as e:
                 logger.warning(f"Error in chat {chat_id}: {e}")
-                if "chat not found" in str(e).lower() or "bot was blocked by the user" in str(e).lower():
-                    logger.info(f"Removing chat {chat_id} due to persistent error.")
-                    app.chat_ids.discard(chat_id)
-                    save_chat_ids(app.chat_ids)
+                # These are common errors when bot is no longer in chat or was blocked
+                if "chat not found" in str(e).lower() or "bot was blocked by the user" in str(e).lower() or "not a member of the chat" in str(e).lower():
+                    logger.info(f"Removing chat {chat_id} due to persistent error (chat not found/blocked/not member).")
+                    await remove_chat_id_from_mongo(chat_id) # Remove from MongoDB
+                # Add specific handling for other persistent errors if needed
             
-            await asyncio.sleep(2)
+            await asyncio.sleep(2) # Delay between messages to different chats
 
-        await asyncio.sleep(60 * 60)
-
-# === On startup ===
+# === On startup / On shutdown ===
 
 async def on_startup(app):
-    app.chat_ids = load_chat_ids()
+    await init_mongo_client() # Initialize MongoDB client
     app.create_task(periodic_announcement(app))
+
+async def on_shutdown(app):
+    if mongo_client:
+        mongo_client.close() # Close MongoDB client connection
+    logger.info("MongoDB client closed.")
 
 def main():
     token = os.getenv("BOT_TOKEN")
@@ -436,10 +514,10 @@ def main():
         raise RuntimeError("BOT_TOKEN not set")
 
     port = int(os.environ.get("PORT", 8000))
-    app = ApplicationBuilder().token(token).post_init(on_startup).build()
+    app = ApplicationBuilder().token(token).post_init(on_startup).post_shutdown(on_shutdown).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome))
+    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome)) 
     app.add_handler(CommandHandler("rules", rules))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("kick", kick))
@@ -447,7 +525,10 @@ def main():
     app.add_handler(CommandHandler("mute", mute))
     app.add_handler(CommandHandler("promote", promote))
     app.add_handler(CommandHandler("demote", demote))
-    app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.ALL, track_chats))
+    
+    # This handler ensures any group the bot interacts with (by message) is tracked.
+    # The 'welcome' handler specifically tracks when the bot *joins* a group.
+    app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.ALL, track_chats)) 
 
     app.add_handler(CallbackQueryHandler(show_support_info, pattern="^show_support_info$"))
     app.add_handler(CallbackQueryHandler(show_info, pattern="^show_info$"))
@@ -457,11 +538,18 @@ def main():
     app.add_handler(CallbackQueryHandler(lang_menu, pattern="^lang_menu$"))
     app.add_handler(CallbackQueryHandler(set_language, pattern="^set_lang:"))
 
+    # CORRECTED LINE HERE
+    webhook_url_from_env = os.getenv("WEBHOOK_URL") # This reads the environment variable named "WEBHOOK_URL"
+    logger.info(f"WEBHOOK_URL read from environment: {webhook_url_from_env}") # Debug print statement
+    
+    if not webhook_url_from_env:
+        raise RuntimeError("WEBHOOK_URL environment variable not set or invalid.")
+
     app.run_webhook(
         listen="0.0.0.0",
         port=port,
         url_path=token,
-        webhook_url=f"https://cooperative-blondelle-saidali-0379e40c.koyeb.app/{token}"
+        webhook_url=webhook_url_from_env # Pass the *value* of the environment variable
     )
 
 if __name__ == "__main__":
