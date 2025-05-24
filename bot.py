@@ -38,7 +38,7 @@ def save_chat_ids(chat_ids):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("➕ Add me to a Group ➕", url="https://t.me/YourBotUsername?startgroup=true")],
+        [InlineKeyboardButton("➕ Add me to a Group ➕", url="https://t.me/mygroupmanagement_bot?startgroup=true")],
         [
             InlineKeyboardButton("📣 Group", url="https://t.me/ghelp"),
             InlineKeyboardButton("📢 Channel", url="https://t.me/ghelp")
