@@ -16,6 +16,7 @@ from telegram.ext import (
     ContextTypes,
     filters
 )
+from telegram.error import RetryAfter # Import RetryAfter for flood control handling
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -58,7 +59,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👉🏻 Add me in a Supergroup and promote me as Admin to let me get in action!\n\n"
         "❓ WHICH ARE THE COMMANDS? ❓\n"
         "Press /help to see all the commands and how they work!\n"
-        "📃 [Privacy policy](https://www.grouphelp.top/privacy)"
+        "📃 [Privacy policy](https://www.grouphelp.top/privacy)" # FIXED: Removed space between ] and (
     )
 
     # Check if it's a callback query or a direct /start command
@@ -301,21 +302,39 @@ async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def periodic_announcement(app):
     while True:
-        # Make a copy of the set to avoid RuntimeError if chat_ids is modified during iteration
-        for chat_id in list(app.chat_ids):
+        chats_to_announce = list(app.chat_ids) # Iterate over a copy
+        if not chats_to_announce: # Avoid error if no chats
+            logger.info("No chats to announce to. Sleeping for 60 seconds.")
+            await asyncio.sleep(60) # Sleep longer if no chats
+            continue
+
+        for chat_id in chats_to_announce:
             try:
-                # Check if the bot is still a member of the chat before sending
                 chat_member = await app.bot.get_chat_member(chat_id=chat_id, user_id=app.bot.id)
                 if chat_member.status in ["member", "administrator", "creator"]:
                     msg = await app.bot.send_message(chat_id=chat_id, text=ANNOUNCEMENT_TEXT)
-                    await msg.pin()
+                    
+                    # Try pinning, but don't crash if it fails due to permissions
+                    try:
+                        await msg.pin()
+                    except Exception as e:
+                        logger.warning(f"Failed to pin message in chat {chat_id}: {e}")
+                    
                     await asyncio.sleep(300)  # Pinned for 5 mins
-                    await msg.unpin()
-                    await msg.delete()
+                    
+                    # Try unpinning and deleting, but don't crash if it fails
+                    try:
+                        await msg.unpin()
+                        await msg.delete()
+                    except Exception as e:
+                        logger.warning(f"Failed to unpin/delete message in chat {chat_id}: {e}")
                 else:
                     logger.info(f"Bot no longer a member of chat {chat_id}. Removing from tracking.")
                     app.chat_ids.discard(chat_id)
                     save_chat_ids(app.chat_ids)
+            except RetryAfter as e: # Handle flood control specifically
+                logger.warning(f"Flood control for chat {chat_id}: Retry in {e.retry_after} seconds. Sleeping.")
+                await asyncio.sleep(e.retry_after + 1) # Sleep a bit longer than required
             except Exception as e:
                 logger.warning(f"Error in chat {chat_id}: {e}")
                 # Consider removing chat_id if error indicates bot was kicked/banned
@@ -323,7 +342,15 @@ async def periodic_announcement(app):
                     logger.info(f"Removing chat {chat_id} due to persistent error.")
                     app.chat_ids.discard(chat_id)
                     save_chat_ids(app.chat_ids)
-        await asyncio.sleep(10)  # 10 seconds before next round
+            
+            # Crucial: Add a delay *between* messages to different chats
+            # This prevents rapid-fire sending and hitting flood limits across multiple groups
+            await asyncio.sleep(2) # Delay of 2 seconds between each chat's announcement
+
+        # This sleep determines how often the *entire cycle* of sending to all tracked chats repeats
+        # Adjust based on how often you want announcements to appear in groups.
+        # Example: 1 hour (3600 seconds)
+        await asyncio.sleep(60 * 60) # Main loop sleep: Check every 1 hour (adjust as needed)
 
 # === On startup ===
 
@@ -367,4 +394,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
