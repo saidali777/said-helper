@@ -2,7 +2,7 @@ import logging
 import os
 import json
 import asyncio
-import motor.motor_asyncio # Correct import for MongoDB
+import motor.motor_asyncio
 from telegram import (
     Update,
     ChatPermissions,
@@ -31,7 +31,8 @@ chat_collection = None # This will store the reference to your 'chats' collectio
 
 async def init_mongo_client():
     global mongo_client, chat_collection
-    mongodb_url = os.getenv("mongodb+srv://nadimkhantelegram:uLMxrqaZslnWeP6r@cluster0.bdxig.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
+    # CORRECTED LINE: Get the MONGODB_URL from environment variables
+    mongodb_url = os.getenv("MONGODB_URL") 
     if not mongodb_url:
         raise RuntimeError("MONGODB_URL environment variable not set.")
     
@@ -538,9 +539,8 @@ def main():
     app.add_handler(CallbackQueryHandler(lang_menu, pattern="^lang_menu$"))
     app.add_handler(CallbackQueryHandler(set_language, pattern="^set_lang:"))
 
-    # CORRECTED LINE HERE
-    webhook_url_from_env = os.getenv("WEBHOOK_URL") # This reads the environment variable named "WEBHOOK_URL"
-    logger.info(f"WEBHOOK_URL read from environment: {webhook_url_from_env}") # Debug print statement
+    webhook_url_from_env = os.getenv("WEBHOOK_URL") 
+    logger.info(f"WEBHOOK_URL read from environment: {webhook_url_from_env}")
     
     if not webhook_url_from_env:
         raise RuntimeError("WEBHOOK_URL environment variable not set or invalid.")
@@ -549,8 +549,9 @@ def main():
         listen="0.0.0.0",
         port=port,
         url_path=token,
-        webhook_url=webhook_url_from_env # Pass the *value* of the environment variable
+        webhook_url=webhook_url_from_env
     )
 
 if __name__ == "__main__":
     main()
+
