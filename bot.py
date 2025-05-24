@@ -1,57 +1,42 @@
 import logging
 import os
+import json
 import asyncio
-from fastapi import FastAPI, Request, Response
-from motor.motor_asyncio import AsyncIOMotorClient
 from telegram import (
-    Update, ChatPermissions, InlineKeyboardButton, InlineKeyboardMarkup
+    Update,
+    ChatPermissions,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup
 )
 from telegram.ext import (
-    Application, ApplicationBuilder, CommandHandler, MessageHandler,
-    CallbackQueryHandler, ContextTypes, filters
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    filters
 )
-from telegram.error import RetryAfter
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.interval import IntervalTrigger
+from telegram.error import RetryAfter # Import RetryAfter for flood control handling
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 ANNOUNCEMENT_TEXT = "📢 This is a recurring announcement."
+DATA_FILE = "chat_ids.json"
 
-# --- MongoDB Setup ---
-mongo_client = None
-chat_collection = None
+# === Load/Save Chat IDs ===
 
-async def init_mongo_client():
-    global mongo_client, chat_collection
-    mongodb_url = os.getenv("MONGODB_URL")
-    if not mongodb_url:
-        raise RuntimeError("MONGODB_URL not set.")
-    mongo_client = AsyncIOMotorClient(mongodb_url)
-    db = mongo_client.get_database("telegram_bot_db")
-    chat_collection = db.get_collection("chat_ids")
-    await chat_collection.create_index("chat_id", unique=True)
-    logger.info("MongoDB initialized.")
+def load_chat_ids():
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r") as f:
+            return set(json.load(f))
+    return set()
 
-async def get_all_chat_ids_from_mongo():
-    chat_ids = set()
-    async for doc in chat_collection.find({}, {"chat_id": 1}):
-        if 'chat_id' in doc:
-            chat_ids.add(doc['chat_id'])
-    return chat_ids
+def save_chat_ids(chat_ids):
+    with open(DATA_FILE, "w") as f:
+        json.dump(list(chat_ids), f)
 
-async def add_chat_id_to_mongo(chat_id: int):
-    await chat_collection.update_one(
-        {"chat_id": chat_id},
-        {"$set": {"chat_id": chat_id}},
-        upsert=True
-    )
-
-async def remove_chat_id_from_mongo(chat_id: int):
-    await chat_collection.delete_one({"chat_id": chat_id})
-
-# --- Bot Handlers (same as your code) ---
+# === Handler functions ===
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
@@ -68,25 +53,128 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
+    # CHANGED: Switched to HTML for easier parsing and consistency
     msg = (
         "👋🏻 Hi ❔!\n"
-        "@mygroupmanagement_bot helps manage your groups easily and safely!\n\n"
-        "👉🏻 Add me to a supergroup and promote me as admin.\n\n"
-        "❓ /help for commands\n"
-        "📃 <a href='https://www.grouphelp.top/privacy'>Privacy policy</a>"
+        "@mygroupmanagement_bot is the most complete Bot to help you manage your groups easily and safely!\n\n"
+        "👉🏻 Add me in a Supergroup and promote me as Admin to let me get in action!\n\n"
+        "❓ WHICH ARE THE COMMANDS? ❓\n"
+        "Press /help to see all the commands and how they work!\n"
+        "📃 <a href='https://www.grouphelp.top/privacy'>Privacy policy</a>" # FIXED: Changed to HTML link syntax
     )
 
+    # Check if it's a callback query or a direct /start command
     if update.callback_query:
-        await update.callback_query.answer()
+        query = update.callback_query
+        await query.answer()
         try:
-            await update.callback_query.edit_message_text(
-                text=msg, reply_markup=reply_markup,
-                disable_web_page_preview=True, parse_mode="HTML"
+            await query.edit_message_text(
+                text=msg,
+                reply_markup=reply_markup,
+                disable_web_page_preview=True,
+                parse_mode="HTML" # CHANGED: parse_mode to HTML
             )
-        except:
-            await update.callback_query.message.reply_text(msg, reply_markup=reply_markup, parse_mode="HTML")
+        except Exception as e:
+            logger.warning(f"Failed to edit message in start: {e}. Sending new message instead.")
+            await query.message.reply_text(
+                text=msg,
+                reply_markup=reply_markup,
+                disable_web_page_preview=True,
+                parse_mode="HTML" # CHANGED: parse_mode to HTML
+            )
     else:
-        await update.message.reply_text(msg, reply_markup=reply_markup, parse_mode="HTML")
+        await update.message.reply_text(msg, reply_markup=reply_markup, disable_web_page_preview=True, parse_mode="HTML") # CHANGED: parse_mode to HTML
+
+async def show_support_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    keyboard = [
+        [InlineKeyboardButton("⬅️ Back", callback_data="back_to_main_menu")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    support_message = (
+        "⚠️ We do NOT provide support for ban, mute or other things "
+        "related to groups managed by this bot: for this kind of requests "
+        "contact the group administrators directly."
+    )
+
+    try:
+        await query.edit_message_text(
+            text=support_message,
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+            disable_web_page_preview=True
+        )
+    except Exception as e:
+        logger.warning(f"Failed to edit message in show_support_info: {e}. Sending new message instead.")
+        await query.message.reply_text(
+            text=support_message,
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+            disable_web_page_preview=True
+        )
+
+async def show_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    keyboard = [
+        [InlineKeyboardButton("Bot Support", url="https://t.me/colonel_support")],
+        [InlineKeyboardButton("Bot commands", callback_data="show_bot_commands")],
+        [InlineKeyboardButton("⬅️ Back", callback_data="back_to_main_menu")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    info_message = (
+        "This bot helps you manage your Telegram groups with ease and security.\n\n"
+        "<b>Key Features:</b>\n"
+        "• User management (kick, ban, mute)\n"
+        "• Admin promotion/demotion\n"
+        "• Welcome messages for new members\n"
+        "• Customizable rules\n"
+        "• Periodic announcements to active groups\n\n"
+        "For more details on commands, use the /help command or click 'Bot commands' below.\n\n"
+    )
+
+    try:
+        await query.edit_message_text(
+            text=info_message,
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+            disable_web_page_preview=True
+        )
+    except Exception as e:
+        logger.warning(f"Failed to edit message in show_info: {e}. Sending new message instead.")
+        await query.message.reply_text(
+            text=info_message,
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+            disable_web_page_preview=True
+        )
+
+async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    for new_user in update.message.new_chat_members:
+        if new_user.id == context.bot.id:
+            continue
+        await update.message.reply_text(
+            f"Welcome, {new_user.full_name}! Please read /rules before chatting."
+        )
+
+async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = "Group Rules:\n1. Be respectful\n2. No spam\n3. Follow Telegram TOS"
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        try:
+            await query.edit_message_text(text=text)
+        except Exception as e:
+            logger.warning(f"Failed to edit message in rules: {e}. Sending new message instead.")
+            await query.message.reply_text(text)
+    else:
+        await update.message.reply_text(text)
+
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
@@ -95,54 +183,29 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/kick - Kick a user (reply only)\n"
         "/ban - Ban a user (reply only)\n"
         "/mute - Mute a user (reply only)\n"
-        "/promote - Promote user (reply only)\n"
-        "/demote - Demote user (reply only)"
+        "/promote - Promote user to admin (reply only)\n"
+        "/demote - Demote admin (reply only)"
     )
+
     if update.callback_query:
-        await update.callback_query.answer()
-        await update.callback_query.edit_message_text(help_text)
+        query = update.callback_query
+        await query.answer()
+        try:
+            await query.edit_message_text(text=help_text)
+        except Exception as e:
+            logger.warning(f"Failed to edit message in help_command: {e}. Sending new message instead.")
+            await query.message.reply_text(text=help_text)
     else:
-        await update.message.reply_text(help_text)
+        await update.message.reply_text(text=help_text)
 
-async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = "Group Rules:\n1. Be respectful\n2. No spam\n3. Follow Telegram TOS"
-    if update.callback_query:
-        await update.callback_query.answer()
-        await update.callback_query.edit_message_text(text)
-    else:
-        await update.message.reply_text(text)
 
-async def show_support_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer()
-    keyboard = [[InlineKeyboardButton("⬅️ Back", callback_data="back_to_main_menu")]]
-    await update.callback_query.edit_message_text(
-        "⚠️ For bans/mutes, contact group admins directly.",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-async def show_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer()
-    keyboard = [
-        [InlineKeyboardButton("Bot Support", url="https://t.me/colonel_support")],
-        [InlineKeyboardButton("Bot commands", callback_data="show_bot_commands")],
-        [InlineKeyboardButton("⬅️ Back", callback_data="back_to_main_menu")]
-    ]
-    msg = (
-        "<b>Features:</b>\n"
-        "• Ban/mute/kick\n"
-        "• Admin controls\n"
-        "• Welcome messages\n"
-        "• Periodic announcements\n"
-    )
-    await update.callback_query.edit_message_text(msg, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
-
-async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    for new_user in update.message.new_chat_members:
-        if new_user.id == context.bot.id:
-            await add_chat_id_to_mongo(update.effective_chat.id)
-            await update.message.reply_text("Thanks for adding me! Please promote me to admin.")
-        else:
-            await update.message.reply_text(f"Welcome {new_user.full_name}! Please read /rules.")
+async def is_admin(update: Update, user_id: int) -> bool:
+    try:
+        chat_admins = await update.effective_chat.get_administrators()
+        return any(admin.user.id == user_id for admin in chat_admins)
+    except Exception as e:
+        logger.warning(f"Admin check failed: {e}")
+        return False
 
 async def require_reply(update, context, action_name):
     if not update.message.reply_to_message:
@@ -150,177 +213,256 @@ async def require_reply(update, context, action_name):
         return None
     if not await is_admin(update, update.message.from_user.id):
         await update.message.reply_text("Only admins can use this command.")
-        return None
+        return None # Added missing return None here
     return update.message.reply_to_message.from_user
-
-async def is_admin(update: Update, user_id: int) -> bool:
-    try:
-        admins = await update.effective_chat.get_administrators()
-        return any(admin.user.id == user_id for admin in admins)
-    except:
-        return False
 
 async def kick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await require_reply(update, context, "kick")
     if user:
-        await context.bot.ban_chat_member(update.effective_chat.id, user.id)
-        await context.bot.unban_chat_member(update.effective_chat.id, user.id)
-        await update.message.reply_text(f"Kicked {user.full_name}")
+        try:
+            await context.bot.ban_chat_member(update.effective_chat.id, user.id)
+            await context.bot.unban_chat_member(update.effective_chat.id, user.id)
+            await update.message.reply_text(f"Kicked {user.full_name}")
+        except Exception as e:
+            await update.message.reply_text(f"Failed to kick {user.full_name}. Error: {e}")
 
 async def ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await require_reply(update, context, "ban")
     if user:
-        await context.bot.ban_chat_member(update.effective_chat.id, user.id)
-        await update.message.reply_text(f"Banned {user.full_name}")
+        try:
+            await context.bot.ban_chat_member(update.effective_chat.id, user.id)
+            await update.message.reply_text(f"Banned {user.full_name}")
+        except Exception as e:
+            await update.message.reply_text(f"Failed to ban {user.full_name}. Error: {e}")
 
 async def mute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await require_reply(update, context, "mute")
     if user:
-        await context.bot.restrict_chat_member(update.effective_chat.id, user.id, permissions=ChatPermissions(can_send_messages=False))
-        await update.message.reply_text(f"Muted {user.full_name}")
+        try:
+            await context.bot.restrict_chat_member(
+                update.effective_chat.id,
+                user.id,
+                permissions=ChatPermissions(can_send_messages=False),
+            )
+            await update.message.reply_text(f"Muted {user.full_name}")
+        except Exception as e:
+            await update.message.reply_text(f"Failed to mute {user.full_name}. Error: {e}")
 
 async def promote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await require_reply(update, context, "promote")
     if user:
-        await context.bot.promote_chat_member(update.effective_chat.id, user.id,
-            can_change_info=True, can_delete_messages=True, can_invite_users=True,
-            can_restrict_members=True, can_pin_messages=True, can_promote_members=False)
-        await update.message.reply_text(f"Promoted {user.full_name} to admin.")
+        try:
+            await context.bot.promote_chat_member(
+                update.effective_chat.id,
+                user.id,
+                can_change_info=True,
+                can_delete_messages=True,
+                can_invite_users=True,
+                can_restrict_members=True,
+                can_pin_messages=True,
+                can_promote_members=False,
+            )
+            await update.message.reply_text(f"Promoted {user.full_name} to admin.")
+        except Exception as e:
+            await update.message.reply_text(f"Failed to promote {user.full_name}. Error: {e}")
 
 async def demote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await require_reply(update, context, "demote")
     if user:
-        await context.bot.promote_chat_member(update.effective_chat.id, user.id,
-            can_change_info=False, can_delete_messages=False, can_invite_users=False,
-            can_restrict_members=False, can_pin_messages=False, can_promote_members=False)
-        await update.message.reply_text(f"Demoted {user.full_name}.")
+        try:
+            await context.bot.promote_chat_member(
+                update.effective_chat.id,
+                user.id,
+                can_change_info=False,
+                can_delete_messages=False,
+                can_invite_users=False,
+                can_restrict_members=False,
+                can_pin_messages=False,
+                can_promote_members=False,
+            )
+            await update.message.reply_text(f"Demoted {user.full_name}.")
+        except Exception as e:
+            await update.message.reply_text(f"Failed to demote {user.full_name}. Error: {e}")
 
-async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await add_chat_id_to_mongo(update.effective_chat.id)
+# === Language Menu Functions ===
 
 async def lang_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer()
-    keyboard = [[InlineKeyboardButton("🇬🇧 English", callback_data="set_lang:en")]]
+    query = update.callback_query
+    await query.answer()
+
+    languages = [
+        ("🇬🇧 English", "en"), ("🇮🇹 Italiano", "it"),
+        ("🇪🇸 Español", "es"), ("🇵🇹 Português", "pt"),
+        ("🇩🇪 Deutsch", "de"), ("🇫🇷 Français", "fr"),
+        ("🇷🇴 Română", "ro"), ("🇳🇱 Nederlands", "nl"),
+        ("🇨🇳 简体中文", "zh-hans"), ("🇺🇦 Українська", "uk"),
+        ("🇷🇺 Русский", "ru"), ("🇰🇿 Қазақ", "kk"),
+        ("🇹🇷 Türkçe", "tr"), ("🇮🇩 Indonesia", "id"),
+        ("🇦🇿 Azərbaycan", "az"), ("🇺🇿 O'zbekcha", "uz"),
+        ("🇺🇦 Uyghurche", "ug"), ("🇲🇾 Melayu", "ms"),
+        ("🇸🇴 Soomaali", "so"), ("🇦🇱 Shqipja", "sq"),
+        ("🇷🇸 Srpski", "sr"), ("🇬🇷 Ελληνικά", "el"),
+        ("🇪🇹 Amharic", "am"), ("🇵🇰 اردو", "ur"),
+        ("🇰🇷 한국어", "ko"), ("🇮🇷 فارسی", "fa"),
+        ("🇮🇳 తెలుగు", "te"), ("🇮🇳 ગુજરાતી", "gu"),
+        ("🇮🇳 ਪੰਜਾਬੀ", "pa"), ("🇮🇳 ಕನ್ನಡ", "kn"),
+        ("🇮🇳 മലയാളം", "ml"), ("🇮🇳 ଓଡ଼ିଆ", "or"),
+        ("🇧🇩 বাংলা", "bn")
+    ]
+
+    keyboard = []
+    for i in range(0, len(languages), 2):
+        row = []
+        row.append(InlineKeyboardButton(languages[i][0], callback_data=f"set_lang:{languages[i][1]}"))
+        if i + 1 < len(languages):
+            row.append(InlineKeyboardButton(languages[i+1][0], callback_data=f"set_lang:{languages[i+1][1]}"))
+        keyboard.append(row)
+    
     keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="back_to_main_menu")])
-    await update.callback_query.edit_message_text("Choose your language:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    try:
+        await query.edit_message_text(
+            text="Choose your language:",
+            reply_markup=reply_markup
+        )
+    except Exception as e:
+        logger.warning(f"Failed to edit message in lang_menu: {e}. Sending new new message instead.")
+        await query.message.reply_text(
+            text="Choose your language:",
+            reply_markup=reply_markup
+        )
 
 async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer()
-    lang = update.callback_query.data.split(":")[1]
-    await update.callback_query.edit_message_text(f"Language set to {lang.upper()}.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="back_to_main_menu")]]))
+    query = update.callback_query
+    await query.answer()
+    
+    lang_code = query.data.split(":")[1]
+    
+    language_names = {
+        "en": "English", "it": "Italiano", "es": "Español", "pt": "Português",
+        "de": "Deutsch", "fr": "Français", "ro": "Română", "nl": "Nederlands",
+        "zh-hans": "简体中文", "uk": "Українська", "ru": "Русский", "kk": "Қазақ",
+        "tr": "Türkçe", "id": "Indonesia", "az": "Azərbaycan", "uz": "O'zbekcha",
+        "ug": "Uyghurche", "ms": "Melayu", "so": "Soomaali", "sq": "Shqipja",
+        "sr": "Srpski", "el": "Ελληνικά", "am": "Amharic", "ur": "اردو",
+        "ko": "한국어", "fa": "فارسی", "te": "తెలుగు", "gu": "ગુજરાતી",
+        "pa": "ਪੰਜਾਬੀ", "kn": "ಕನ್ನಡ", "ml": "മലയാളം", "or": "ଓଡ଼ିଆ",
+        "bn": "বাংলা"
+    }
+    
+    chosen_language_name = language_names.get(lang_code, "Unknown")
+    
+    confirmation_message = f"Language set to {chosen_language_name}."
 
-
-# === Periodic Announcements using APScheduler ===
-
-async def periodic_announcement(app: Application):
-    chat_ids = list(await get_all_chat_ids_from_mongo())
-    for chat_id in chat_ids:
-        try:
-            member = await app.bot.get_chat_member(chat_id, app.bot.id)
-            if member.status in ["member", "administrator", "creator"]:
-                msg = await app.bot.send_message(chat_id, ANNOUNCEMENT_TEXT)
-                try:
-                    await msg.pin()
-                except Exception:
-                    pass
-                await asyncio.sleep(300)  # Wait 5 minutes before unpinning
-                try:
-                    await msg.unpin()
-                    await msg.delete()
-                except Exception:
-                    pass
-            else:
-                await remove_chat_id_from_mongo(chat_id)
-        except RetryAfter as e:
-            logger.warning(f"Rate limit hit, sleeping {e.retry_after} seconds.")
-            await asyncio.sleep(e.retry_after + 1)
-        except Exception as e:
-            logger.error(f"Error sending announcement to {chat_id}: {e}")
-            await remove_chat_id_from_mongo(chat_id)
-
-# --- FastAPI app and Telegram webhook setup ---
-
-app = FastAPI()
-
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN environment variable is required.")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-if not WEBHOOK_URL:
-    raise RuntimeError("WEBHOOK_URL environment variable is required.")
-
-application = ApplicationBuilder().token(BOT_TOKEN).build()
-
-# Register handlers
-application.add_handler(CommandHandler("start", start))
-application.add_handler(CommandHandler("help", help_command))
-application.add_handler(CommandHandler("rules", rules))
-application.add_handler(CommandHandler("kick", kick))
-application.add_handler(CommandHandler("ban", ban))
-application.add_handler(CommandHandler("mute", mute))
-application.add_handler(CommandHandler("promote", promote))
-application.add_handler(CommandHandler("demote", demote))
-application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome))
-application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.ALL, track_chats))
-
-application.add_handler(CallbackQueryHandler(show_support_info, pattern="^show_support_info$"))
-application.add_handler(CallbackQueryHandler(show_info, pattern="^show_info$"))
-application.add_handler(CallbackQueryHandler(help_command, pattern="^show_bot_commands$"))
-application.add_handler(CallbackQueryHandler(start, pattern="^back_to_main_menu$"))
-application.add_handler(CallbackQueryHandler(lang_menu, pattern="^lang_menu$"))
-application.add_handler(CallbackQueryHandler(set_language, pattern="^set_lang:"))
-
-
-@app.on_event("startup")
-async def startup_event():
-    logger.info("Starting up...")
-    await init_mongo_client()
-    # Set webhook
-    await application.bot.set_webhook(f"{WEBHOOK_URL}/{BOT_TOKEN}")
-    logger.info("Webhook set.")
-    # Start APScheduler for announcements
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(periodic_announcement, IntervalTrigger(hours=1), args=[application])
-    scheduler.start()
-    app.state.scheduler = scheduler
-    logger.info("Scheduler started.")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    logger.info("Shutting down...")
-    if mongo_client:
-        mongo_client.close()
-        logger.info("MongoDB connection closed.")
-    # Remove webhook
     try:
-        await application.bot.delete_webhook()
+        await query.edit_message_text(
+            text=confirmation_message,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="back_to_main_menu")]])
+        )
     except Exception as e:
-        logger.error(f"Error deleting webhook: {e}")
-    # Shutdown scheduler
-    scheduler = app.state.scheduler
-    if scheduler:
-        scheduler.shutdown()
-        logger.info("Scheduler stopped.")
+        logger.warning(f"Failed to edit message in set_language: {e}. Sending new message instead.")
+        await query.message.reply_text(
+            text=confirmation_message,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="back_to_main_menu")]])
+        )
 
-@app.post(f"/{BOT_TOKEN}")
-async def telegram_webhook(request: Request):
-    try:
-        json_data = await request.json()
-    except Exception:
-        return Response(status_code=400)
-    update = Update.de_json(json_data, application.bot)
-    await application.update_queue.put(update)
-    return Response(status_code=200)
 
-# Optional root endpoint for health check
-@app.get("/")
-async def root():
-    return {"status": "ok"}
+# === Chat tracking ===
 
-# --- Main entrypoint ---
+async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    app = context.application
+    chat_id = update.effective_chat.id
+    if chat_id not in app.chat_ids:
+        app.chat_ids.add(chat_id)
+        save_chat_ids(app.chat_ids)
+
+# === Periodic Announcement ===
+
+async def periodic_announcement(app):
+    while True:
+        chats_to_announce = list(app.chat_ids)
+        if not chats_to_announce:
+            logger.info("No chats to announce to. Sleeping for 60 seconds.")
+            await asyncio.sleep(60)
+            continue
+
+        for chat_id in chats_to_announce:
+            try:
+                chat_member = await app.bot.get_chat_member(chat_id=chat_id, user_id=app.bot.id)
+                if chat_member.status in ["member", "administrator", "creator"]:
+                    msg = await app.bot.send_message(chat_id=chat_id, text=ANNOUNCEMENT_TEXT)
+                    
+                    try:
+                        await msg.pin()
+                    except Exception as e:
+                        logger.warning(f"Failed to pin message in chat {chat_id}: {e}")
+                    
+                    await asyncio.sleep(300)
+                    
+                    try:
+                        await msg.unpin()
+                        await msg.delete()
+                    except Exception as e:
+                        logger.warning(f"Failed to unpin/delete message in chat {chat_id}: {e}")
+                else:
+                    logger.info(f"Bot no longer a member of chat {chat_id}. Removing from tracking.")
+                    app.chat_ids.discard(chat_id)
+                    save_chat_ids(app.chat_ids)
+            except RetryAfter as e:
+                logger.warning(f"Flood control for chat {chat_id}: Retry in {e.retry_after} seconds. Sleeping.")
+                await asyncio.sleep(e.retry_after + 1)
+            except Exception as e:
+                logger.warning(f"Error in chat {chat_id}: {e}")
+                if "chat not found" in str(e).lower() or "bot was blocked by the user" in str(e).lower():
+                    logger.info(f"Removing chat {chat_id} due to persistent error.")
+                    app.chat_ids.discard(chat_id)
+                    save_chat_ids(app.chat_ids)
+            
+            await asyncio.sleep(2)
+
+        await asyncio.sleep(60 * 60)
+
+# === On startup ===
+
+async def on_startup(app):
+    app.chat_ids = load_chat_ids()
+    app.create_task(periodic_announcement(app))
+
+def main():
+    token = os.getenv("BOT_TOKEN")
+    if not token:
+        raise RuntimeError("BOT_TOKEN not set")
+
+    port = int(os.environ.get("PORT", 8000))
+    app = ApplicationBuilder().token(token).post_init(on_startup).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome))
+    app.add_handler(CommandHandler("rules", rules))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("kick", kick))
+    app.add_handler(CommandHandler("ban", ban))
+    app.add_handler(CommandHandler("mute", mute))
+    app.add_handler(CommandHandler("promote", promote))
+    app.add_handler(CommandHandler("demote", demote))
+    app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.ALL, track_chats))
+
+    app.add_handler(CallbackQueryHandler(show_support_info, pattern="^show_support_info$"))
+    app.add_handler(CallbackQueryHandler(show_info, pattern="^show_info$"))
+    app.add_handler(CallbackQueryHandler(help_command, pattern="^show_bot_commands$"))
+    app.add_handler(CallbackQueryHandler(start, pattern="^back_to_main_menu$"))
+    
+    app.add_handler(CallbackQueryHandler(lang_menu, pattern="^lang_menu$"))
+    app.add_handler(CallbackQueryHandler(set_language, pattern="^set_lang:"))
+
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        url_path=token,
+        webhook_url=f"https://cooperative-blondelle-saidali-0379e40c.koyeb.app/{token}"
+    )
 
 if __name__ == "__main__":
-    import uvicorn
-    port = int(os.getenv("PORT", 8000))
-    uvicorn.run("bot:app", host="0.0.0.0", port=port)
-
+    main()
