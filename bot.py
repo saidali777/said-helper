@@ -2,7 +2,7 @@ import logging
 import os
 import json
 import asyncio
-import motor.motor_asyncio
+import motor.motor_asyncio # Correct import for MongoDB
 from telegram import (
     Update,
     ChatPermissions,
@@ -211,7 +211,7 @@ async def show_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(
             text=info_message,
             reply_markup=reply_markup,
-            parse_web_page_preview=True,
+            disable_web_page_preview=True, # Corrected typo here
             parse_mode="HTML"
         )
 
@@ -287,6 +287,7 @@ async def kick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user:
         try:
             await context.bot.ban_chat_member(update.effective_chat.id, user.id)
+            await context.bot.unban_chat_member(update.effective_chat.id, user.id)
             await update.message.reply_text(f"Kicked {user.full_name}")
         except Exception as e:
             await update.message.reply_text(f"Failed to kick {user.full_name}. Error: {e}")
@@ -517,12 +518,14 @@ def main():
         raise RuntimeError("BOT_TOKEN not set")
 
     port = int(os.environ.get("PORT", 8000))
+    
+    # Corrected ApplicationBuilder chain - ensure NO spaces after backslashes
     app = ApplicationBuilder().token(token)\
         .post_init(on_startup)\
         .post_shutdown(on_shutdown)\
-        .connect_timeout(10)\  # Increased connection timeout to 10 seconds
-        .read_timeout(20)\     # Increased read timeout to 20 seconds
-        .write_timeout(20)\    # Increased write timeout to 20 seconds
+        .connect_timeout(10)\
+        .read_timeout(20)\
+        .write_timeout(20)\
         .build()
 
     app.add_handler(CommandHandler("start", start))
@@ -562,4 +565,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
