@@ -18,6 +18,7 @@ from telegram.ext import (
     filters
 )
 from telegram.error import RetryAfter, Forbidden
+import sys # Import sys module for exiting
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -63,10 +64,9 @@ async def get_all_chat_ids_from_mongo():
 async def add_chat_id_to_mongo(chat_id: int, chat_title: str = None):
     """Adds a chat ID and title to the MongoDB collection if it doesn't already exist or updates the title."""
     try:
-        # Use update_one with upsert=True to insert if not exists, or update the title if it does
         result = await chat_collection.update_one(
             {"chat_id": chat_id},
-            {"$set": {"chat_id": chat_id, "chat_title": chat_title}}, # Store the chat_id and title
+            {"$set": {"chat_id": chat_id, "chat_title": chat_title}},
             upsert=True
         )
         if result.upserted_id:
@@ -236,6 +236,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/help - Show this message\n"
         "/rules - Show group rules\n"
         "/settings - Manage group settings (private chat only)\n"
+        "/reload - Restart the bot (admin only in groups)\n" # Added /reload to help
         "/kick - Kick a user (reply only)\n"
         "/ban - Ban a user (reply only)\n"
         "/mute - Mute a user (reply only)\n"
@@ -423,7 +424,7 @@ async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="back_to_main_menu")]])
         )
 
-# --- New /settings command and related functions ---
+# --- /settings command and related functions ---
 
 async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -462,14 +463,14 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     keyboard.append([InlineKeyboardButton(chat_title, callback_data=f"group_settings:{chat_id}")])
             else:
                 logger.info(f"Bot is no longer a member of chat {chat_id} ('{chat_title}'). Removing from MongoDB.")
-                await remove_chat_id_from_mongo(chat_id) # Clean up untracked chats
+                await remove_chat_id_from_mongo(chat_id)
         except Forbidden:
             logger.info(f"Bot was kicked/blocked from chat {chat_id} ('{chat_title}'). Removing from MongoDB.")
             await remove_chat_id_from_mongo(chat_id)
         except Exception as e:
             logger.warning(f"Could not retrieve chat info for {chat_id} ('{chat_title}'): {e}")
             # Optionally, remove chat if it consistently fails
-            # await remove_chat_id_from_mongo(chat_id) # Consider removing if errors persist
+            # await remove_chat_id_from_mongo(chat_id)
 
     if not keyboard:
         settings_message += "\n\n<i>No groups found where you are an administrator and the bot is present.</i>"
@@ -510,7 +511,6 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 disable_web_page_preview=True
             )
 
-
 async def show_group_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -518,11 +518,9 @@ async def show_group_settings(update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_id_str = query.data.split(":")[1]
     chat_id = int(chat_id_str)
 
-    # Fetch chat title from the database
     chat_doc = await chat_collection.find_one({"chat_id": chat_id})
     chat_title = chat_doc.get('chat_title', f"Unknown Chat ({chat_id})") if chat_doc else f"Unknown Chat ({chat_id})"
 
-    # Implement your group-specific settings here
     settings_text = f"⚙️ Settings for group: <b>{chat_title}</b>\n\n" \
                     f"<i>(Further settings options will be implemented here, e.g., welcome message, rules, etc.)</i>"
     
@@ -546,6 +544,25 @@ async def show_group_settings(update: Update, context: ContextTypes.DEFAULT_TYPE
             parse_mode="HTML",
             disable_web_page_preview=True
         )
+
+# --- New /reload command ---
+async def reload_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+
+    if update.effective_chat.type in ["group", "supergroup"]:
+        # Check if the user is an admin in the group
+        if await is_admin(update, user_id):
+            await update.message.reply_text("🔄 Bot is restarting... Please wait a moment.")
+            logger.info(f"Bot restart requested by admin {user_id} in chat {chat_id}. Exiting for restart.")
+            # This will terminate the current Python process.
+            # Your process manager (e.g., systemd, Supervisor) should automatically restart it.
+            sys.exit(0) # Exit with a success code
+        else:
+            await update.message.reply_text("🚫 Only administrators can use the /reload command in groups.")
+    else:
+        await update.message.reply_text("This command can only be used in a group chat where I am an administrator.")
+
 
 # === Chat tracking ===
 async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -644,8 +661,8 @@ def main():
     app.add_handler(CommandHandler("promote", promote))
     app.add_handler(CommandHandler("demote", demote))
     
-    # New /settings command handler
     app.add_handler(CommandHandler("settings", settings_command))
+    app.add_handler(CommandHandler("reload", reload_command)) # Add the new reload command handler
     
     app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.ALL, track_chats))    
 
@@ -657,9 +674,8 @@ def main():
     app.add_handler(CallbackQueryHandler(lang_menu, pattern="^lang_menu$"))
     app.add_handler(CallbackQueryHandler(set_language, pattern="^set_lang:"))
     
-    # Callback for showing specific group settings
     app.add_handler(CallbackQueryHandler(show_group_settings, pattern="^group_settings:"))
-    app.add_handler(CallbackQueryHandler(settings_command, pattern="^back_to_settings_list$")) # Back from group settings
+    app.add_handler(CallbackQueryHandler(settings_command, pattern="^back_to_settings_list$"))
 
     webhook_url_from_env = os.getenv("WEBHOOK_URL")    
     logger.info(f"WEBHOOK_URL read from environment: {webhook_url_from_env}")    
