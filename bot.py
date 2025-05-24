@@ -446,18 +446,13 @@ async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # === Periodic Announcement ===
 
 async def periodic_announcement(app):
-    first_run = True
     while True:
-        if not first_run:
-            await asyncio.sleep(60 * 60) # Wait for 1 hour after the first run
-        first_run = False
-
         # Fetch chats from MongoDB directly
         chats_to_announce = list(await get_all_chat_ids_from_mongo())
         
         if not chats_to_announce:
-            logger.info("No chats to announce to. Sleeping for 60 seconds.")
-            await asyncio.sleep(60)
+            logger.info("No chats to announce to. Sleeping for 10 seconds before checking again.")
+            await asyncio.sleep(10) # Small sleep to avoid constant hammering if no chats
             continue
 
         for chat_id in chats_to_announce:
@@ -473,7 +468,8 @@ async def periodic_announcement(app):
                     except Exception as e:
                         logger.warning(f"Failed to pin message in chat {chat_id}: {e}")
                     
-                    await asyncio.sleep(300)
+                    # Wait for 5 minutes (300 seconds) before unpinning/deleting
+                    await asyncio.sleep(300) 
                     
                     try:
                         await msg.unpin()
@@ -486,7 +482,8 @@ async def periodic_announcement(app):
                     await remove_chat_id_from_mongo(chat_id) # Remove from MongoDB
             except RetryAfter as e:
                 logger.warning(f"Flood control for chat {chat_id}: Retry in {e.retry_after} seconds. Sleeping.")
-                await asyncio.sleep(e.retry_after + 1)
+                # Respect the retry_after value and add a small buffer
+                await asyncio.sleep(e.retry_after + 1) 
             except Exception as e:
                 logger.warning(f"Error in chat {chat_id}: {e}")
                 # These are common errors when bot is no longer in chat or was blocked
@@ -495,7 +492,14 @@ async def periodic_announcement(app):
                     await remove_chat_id_from_mongo(chat_id) # Remove from MongoDB
                 # Add specific handling for other persistent errors if needed
             
-            await asyncio.sleep(2) # Delay between messages to different chats
+            # This small delay is crucial to prevent immediate successive API calls
+            # across different chats which can trigger global rate limits.
+            # 0.5 seconds is a good minimum between messages to different chats.
+            await asyncio.sleep(0.5) 
+        
+        # After iterating through all chats, wait for 30 seconds before starting the next full cycle
+        logger.info("Finished one cycle of announcements. Sleeping for 30 seconds.")
+        await asyncio.sleep(30)
 
 # === On startup / On shutdown ===
 
@@ -538,9 +542,8 @@ def main():
     app.add_handler(CallbackQueryHandler(lang_menu, pattern="^lang_menu$"))
     app.add_handler(CallbackQueryHandler(set_language, pattern="^set_lang:"))
 
-    # CORRECTED LINE HERE
-    webhook_url_from_env = os.getenv("WEBHOOK_URL") # This reads the environment variable named "WEBHOOK_URL"
-    logger.info(f"WEBHOOK_URL read from environment: {webhook_url_from_env}") # Debug print statement
+    webhook_url_from_env = os.getenv("WEBHOOK_URL") 
+    logger.info(f"WEBHOOK_URL read from environment: {webhook_url_from_env}") 
     
     if not webhook_url_from_env:
         raise RuntimeError("WEBHOOK_URL environment variable not set or invalid.")
@@ -549,8 +552,9 @@ def main():
         listen="0.0.0.0",
         port=port,
         url_path=token,
-        webhook_url=webhook_url_from_env # Pass the *value* of the environment variable
+        webhook_url=webhook_url_from_env 
     )
 
 if __name__ == "__main__":
     main()
+
