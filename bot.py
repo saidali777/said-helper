@@ -1,39 +1,66 @@
 import logging
 import os
-import asyncio
 import json
-from telegram import Update, ChatPermissions
+import asyncio
+from telegram import (
+    Update,
+    ChatPermissions,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup
+)
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
-    ContextTypes, filters
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters
 )
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 ANNOUNCEMENT_TEXT = "📢 This is a recurring announcement."
-CHAT_IDS_FILE = "chat_ids.json"
+DATA_FILE = "chat_ids.json"
 
-# === JSON File Utilities ===
-
-def save_chat_ids(chat_ids):
-    try:
-        with open(CHAT_IDS_FILE, "w") as f:
-            json.dump(list(chat_ids), f)
-    except Exception as e:
-        logger.error(f"Error saving chat_ids: {e}")
+# === Load/Save Chat IDs ===
 
 def load_chat_ids():
-    if not os.path.exists(CHAT_IDS_FILE):
-        return set()
-    try:
-        with open(CHAT_IDS_FILE, "r") as f:
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r") as f:
             return set(json.load(f))
-    except Exception as e:
-        logger.error(f"Error loading chat_ids: {e}")
-        return set()
+    return set()
 
-# === Handler Functions ===
+def save_chat_ids(chat_ids):
+    with open(DATA_FILE, "w") as f:
+        json.dump(list(chat_ids), f)
+
+# === Handler functions ===
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("➕ Add me to a Group ➕", url="https://t.me/YourBotUsername?startgroup=true")],
+        [
+            InlineKeyboardButton("📣 Group", url="https://t.me/ghelp"),
+            InlineKeyboardButton("📢 Channel", url="https://t.me/ghelp")
+        ],
+        [
+            InlineKeyboardButton("🛠️ Support", url="https://t.me/YourSupportLink"),
+            InlineKeyboardButton("ℹ️ Information", url="https://t.me/YourInfoLink")
+        ],
+        [InlineKeyboardButton("🇬🇧 Languages 🇬🇧", callback_data="lang_menu")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    msg = (
+        "👋🏻 Hi ❔!\n"
+        "@GroupHelpBot is the most complete Bot to help you manage your groups easily and safely!\n\n"
+        "👉🏻 Add me in a Supergroup and promote me as Admin to let me get in action!\n\n"
+        "❓ WHICH ARE THE COMMANDS? ❓\n"
+        "Press /help to see all the commands and how they work!\n"
+        "📃 [Privacy policy](https://www.grouphelp.top/privacy)"
+    )
+
+    await update.message.reply_text(msg, reply_markup=reply_markup, disable_web_page_preview=True, parse_mode="Markdown")
 
 async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for new_user in update.message.new_chat_members:
@@ -56,8 +83,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def is_admin(update: Update, user_id: int) -> bool:
-    chat_admins = await update.effective_chat.get_administrators()
-    return any(admin.user.id == user_id for admin in chat_admins)
+    try:
+        chat_admins = await update.effective_chat.get_administrators()
+        return any(admin.user.id == user_id for admin in chat_admins)
+    except Exception as e:
+        logger.warning(f"Admin check failed: {e}")
+        return False
 
 async def require_reply(update, context, action_name):
     if not update.message.reply_to_message:
@@ -121,7 +152,7 @@ async def demote(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_text(f"Demoted {user.full_name}.")
 
-# === Track group chat_ids and save to file ===
+# === Chat tracking ===
 
 async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     app = context.application
@@ -130,21 +161,20 @@ async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         app.chat_ids.add(chat_id)
         save_chat_ids(app.chat_ids)
 
-# === Periodic Announcement Function ===
+# === Periodic Announcement ===
 
 async def periodic_announcement(app):
-    await asyncio.sleep(5)
     while True:
         for chat_id in list(app.chat_ids):
             try:
                 msg = await app.bot.send_message(chat_id=chat_id, text=ANNOUNCEMENT_TEXT)
                 await msg.pin()
-                await asyncio.sleep(300)  # 5 minutes
+                await asyncio.sleep(300)  # Pinned for 5 mins
                 await msg.unpin()
                 await msg.delete()
             except Exception as e:
-                logger.warning(f"Failed in group {chat_id}: {e}")
-        await asyncio.sleep(180)  # 3 minutes pause
+                logger.warning(f"Error in chat {chat_id}: {e}")
+        await asyncio.sleep(10)  # 10 seconds before next round
 
 # === On startup ===
 
@@ -158,10 +188,9 @@ def main():
         raise RuntimeError("BOT_TOKEN not set")
 
     port = int(os.environ.get("PORT", 8000))
+    app = ApplicationBuilder().token(token).post_init(on_startup).build()
 
-    app = ApplicationBuilder().token(token).build()
-    app.post_init = on_startup
-
+    app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome))
     app.add_handler(CommandHandler("rules", rules))
     app.add_handler(CommandHandler("help", help_command))
@@ -181,7 +210,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
 
 
