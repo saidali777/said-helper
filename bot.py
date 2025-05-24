@@ -1,15 +1,18 @@
 import logging
 import os
 import asyncio
-import motor.motor_asyncio
+from fastapi import FastAPI, Request, Response
+from motor.motor_asyncio import AsyncIOMotorClient
 from telegram import (
     Update, ChatPermissions, InlineKeyboardButton, InlineKeyboardMarkup
 )
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
+    Application, ApplicationBuilder, CommandHandler, MessageHandler,
     CallbackQueryHandler, ContextTypes, filters
 )
 from telegram.error import RetryAfter
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.interval import IntervalTrigger
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -25,10 +28,11 @@ async def init_mongo_client():
     mongodb_url = os.getenv("MONGODB_URL")
     if not mongodb_url:
         raise RuntimeError("MONGODB_URL not set.")
-    mongo_client = motor.motor_asyncio.AsyncIOMotorClient(mongodb_url)
+    mongo_client = AsyncIOMotorClient(mongodb_url)
     db = mongo_client.get_database("telegram_bot_db")
     chat_collection = db.get_collection("chat_ids")
     await chat_collection.create_index("chat_id", unique=True)
+    logger.info("MongoDB initialized.")
 
 async def get_all_chat_ids_from_mongo():
     chat_ids = set()
@@ -47,7 +51,7 @@ async def add_chat_id_to_mongo(chat_id: int):
 async def remove_chat_id_from_mongo(chat_id: int):
     await chat_collection.delete_one({"chat_id": chat_id})
 
-# --- Bot Handlers ---
+# --- Bot Handlers (same as your code) ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
@@ -205,82 +209,118 @@ async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = update.callback_query.data.split(":")[1]
     await update.callback_query.edit_message_text(f"Language set to {lang.upper()}.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="back_to_main_menu")]]))
 
-# === Periodic Announcements ===
 
-async def periodic_announcement(app):
-    first_run = True
-    while True:
-        if not first_run:
-            await asyncio.sleep(3600)
-        first_run = False
-        chat_ids = list(await get_all_chat_ids_from_mongo())
-        for chat_id in chat_ids:
-            try:
-                member = await app.bot.get_chat_member(chat_id, app.bot.id)
-                if member.status in ["member", "administrator", "creator"]:
-                    msg = await app.bot.send_message(chat_id, ANNOUNCEMENT_TEXT)
-                    try:
-                        await msg.pin()
-                    except: pass
-                    await asyncio.sleep(300)
-                    try:
-                        await msg.unpin()
-                        await msg.delete()
-                    except: pass
-                else:
-                    await remove_chat_id_from_mongo(chat_id)
-            except RetryAfter as e:
-                await asyncio.sleep(e.retry_after + 1)
-            except:
+# === Periodic Announcements using APScheduler ===
+
+async def periodic_announcement(app: Application):
+    chat_ids = list(await get_all_chat_ids_from_mongo())
+    for chat_id in chat_ids:
+        try:
+            member = await app.bot.get_chat_member(chat_id, app.bot.id)
+            if member.status in ["member", "administrator", "creator"]:
+                msg = await app.bot.send_message(chat_id, ANNOUNCEMENT_TEXT)
+                try:
+                    await msg.pin()
+                except Exception:
+                    pass
+                await asyncio.sleep(300)  # Wait 5 minutes before unpinning
+                try:
+                    await msg.unpin()
+                    await msg.delete()
+                except Exception:
+                    pass
+            else:
                 await remove_chat_id_from_mongo(chat_id)
-            await asyncio.sleep(2)
+        except RetryAfter as e:
+            logger.warning(f"Rate limit hit, sleeping {e.retry_after} seconds.")
+            await asyncio.sleep(e.retry_after + 1)
+        except Exception as e:
+            logger.error(f"Error sending announcement to {chat_id}: {e}")
+            await remove_chat_id_from_mongo(chat_id)
 
-# === Startup/Shutdown ===
+# --- FastAPI app and Telegram webhook setup ---
 
-async def on_startup(app):
+app = FastAPI()
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN environment variable is required.")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+if not WEBHOOK_URL:
+    raise RuntimeError("WEBHOOK_URL environment variable is required.")
+
+application = ApplicationBuilder().token(BOT_TOKEN).build()
+
+# Register handlers
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("help", help_command))
+application.add_handler(CommandHandler("rules", rules))
+application.add_handler(CommandHandler("kick", kick))
+application.add_handler(CommandHandler("ban", ban))
+application.add_handler(CommandHandler("mute", mute))
+application.add_handler(CommandHandler("promote", promote))
+application.add_handler(CommandHandler("demote", demote))
+application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome))
+application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.ALL, track_chats))
+
+application.add_handler(CallbackQueryHandler(show_support_info, pattern="^show_support_info$"))
+application.add_handler(CallbackQueryHandler(show_info, pattern="^show_info$"))
+application.add_handler(CallbackQueryHandler(help_command, pattern="^show_bot_commands$"))
+application.add_handler(CallbackQueryHandler(start, pattern="^back_to_main_menu$"))
+application.add_handler(CallbackQueryHandler(lang_menu, pattern="^lang_menu$"))
+application.add_handler(CallbackQueryHandler(set_language, pattern="^set_lang:"))
+
+
+@app.on_event("startup")
+async def startup_event():
+    logger.info("Starting up...")
     await init_mongo_client()
-    app.create_task(periodic_announcement(app))
+    # Set webhook
+    await application.bot.set_webhook(f"{WEBHOOK_URL}/{BOT_TOKEN}")
+    logger.info("Webhook set.")
+    # Start APScheduler for announcements
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(periodic_announcement, IntervalTrigger(hours=1), args=[application])
+    scheduler.start()
+    app.state.scheduler = scheduler
+    logger.info("Scheduler started.")
 
-async def on_shutdown(app):
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("Shutting down...")
     if mongo_client:
         mongo_client.close()
         logger.info("MongoDB connection closed.")
+    # Remove webhook
+    try:
+        await application.bot.delete_webhook()
+    except Exception as e:
+        logger.error(f"Error deleting webhook: {e}")
+    # Shutdown scheduler
+    scheduler = app.state.scheduler
+    if scheduler:
+        scheduler.shutdown()
+        logger.info("Scheduler stopped.")
 
-def main():
-    token = os.getenv("BOT_TOKEN")
-    if not token:
-        raise RuntimeError("BOT_TOKEN not set.")
-    port = int(os.environ.get("PORT", 8000))
-    webhook_url = os.getenv("WEBHOOK_URL")
-    if not webhook_url:
-        raise RuntimeError("WEBHOOK_URL not set.")
-    
-    app = ApplicationBuilder().token(token).post_init(on_startup).post_shutdown(on_shutdown).build()
+@app.post(f"/{BOT_TOKEN}")
+async def telegram_webhook(request: Request):
+    try:
+        json_data = await request.json()
+    except Exception:
+        return Response(status_code=400)
+    update = Update.de_json(json_data, application.bot)
+    await application.update_queue.put(update)
+    return Response(status_code=200)
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("rules", rules))
-    app.add_handler(CommandHandler("kick", kick))
-    app.add_handler(CommandHandler("ban", ban))
-    app.add_handler(CommandHandler("mute", mute))
-    app.add_handler(CommandHandler("promote", promote))
-    app.add_handler(CommandHandler("demote", demote))
-    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome))
-    app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.ALL, track_chats))
+# Optional root endpoint for health check
+@app.get("/")
+async def root():
+    return {"status": "ok"}
 
-    app.add_handler(CallbackQueryHandler(show_support_info, pattern="^show_support_info$"))
-    app.add_handler(CallbackQueryHandler(show_info, pattern="^show_info$"))
-    app.add_handler(CallbackQueryHandler(help_command, pattern="^show_bot_commands$"))
-    app.add_handler(CallbackQueryHandler(start, pattern="^back_to_main_menu$"))
-    app.add_handler(CallbackQueryHandler(lang_menu, pattern="^lang_menu$"))
-    app.add_handler(CallbackQueryHandler(set_language, pattern="^set_lang:"))
-
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=port,
-        url_path=token,
-        webhook_url=f"{webhook_url}/{token}"
-    )
+# --- Main entrypoint ---
 
 if __name__ == "__main__":
-    main()
+    import uvicorn
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run("bot:app", host="0.0.0.0", port=port)
+
