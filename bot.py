@@ -534,7 +534,7 @@ async def show_group_settings(update: Update, context: ContextTypes.DEFAULT_TYPE
     # Construct the message text as per the image
     settings_text = (
         f"SETTINGS\n"
-        f"Group:  {chat_title} \n\n" # Placeholder  and static text as in image
+        f"Group: ?, {chat_title} and GROUP MANAGER\n\n" # Placeholder "?" and static text as in image
         f"Select one of the settings that you want to change."
     )
     
@@ -572,7 +572,7 @@ async def show_group_settings(update: Update, context: ContextTypes.DEFAULT_TYPE
             InlineKeyboardButton("Tag", callback_data=f"setting_tag:{chat_id}"),
             InlineKeyboardButton("Link", callback_data=f"setting_link:{chat_id}")
         ],
-        [InlineKeyboardButton("Approval mode", callback_data=f"setting_approval_mode:{chat_id}")],
+        [InlineKeyboardButton("Approval mode", callback_data=f"setting_approval_mode:{chat_id})")],
         [InlineKeyboardButton("Deleting Messages", callback_data=f"setting_deleting_messages:{chat_id}")],
         [
             InlineKeyboardButton("Lang", callback_data=f"setting_lang:{chat_id}"), # Callback to handle group-specific language
@@ -598,6 +598,56 @@ async def show_group_settings(update: Update, context: ContextTypes.DEFAULT_TYPE
             parse_mode="HTML",
             disable_web_page_preview=True
         )
+
+# --- New function for 'Other' settings ---
+async def show_other_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    # Extract chat_id from callback_data
+    chat_id_str = query.data.split(":")[1]
+    chat_id = int(chat_id_str)
+
+    # Message to display for 'Other' settings
+    message = (
+        "These settings affect only this group. Please read the full documentation "
+        "before using them to prevent problems. <b>Last update: 21:08</b>"
+    )
+
+    # Buttons for 'Other' settings as per screenshot
+    keyboard = [
+        [
+            InlineKeyboardButton("⚙️ Advanced Settings", callback_data=f"other_setting_advanced_settings:{chat_id}"),
+            InlineKeyboardButton("🔙 Custom commands", callback_data=f"other_setting_custom_commands:{chat_id}")
+        ],
+        [
+            InlineKeyboardButton("➕ Filters", callback_data=f"other_setting_filters:{chat_id}"),
+            InlineKeyboardButton("🚫 Blacklist", callback_data=f"other_setting_blacklist:{chat_id}")
+        ],
+        [
+            InlineKeyboardButton("❌ Lock commands", callback_data=f"other_setting_lock_commands:{chat_id}"),
+            InlineKeyboardButton("⚙️ Admin Settings", callback_data=f"other_setting_admin_settings:{chat_id}")
+        ],
+        [InlineKeyboardButton("⬅️ Back", callback_data=f"group_settings:{chat_id}")] # Back to the main group settings menu
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    try:
+        await query.edit_message_text(
+            text=message,
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+            disable_web_page_preview=True
+        )
+    except Exception as e:
+        logger.error(f"Error editing message for other settings: {e}")
+        await query.message.reply_text(
+            text=message,
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+            disable_web_page_preview=True
+        )
+
 
 # --- New /reload command ---
 async def reload_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -727,6 +777,7 @@ def main():
     app.add_handler(CallbackQueryHandler(set_language, pattern="^set_lang:"))
     
     app.add_handler(CallbackQueryHandler(show_group_settings, pattern="^group_settings:"))
+    app.add_handler(CallbackQueryHandler(show_other_settings, pattern="^setting_other:")) # NEW Handler for 'Other' button
     app.add_handler(CallbackQueryHandler(settings_command, pattern="^back_to_settings_list$"))
 
     webhook_url_from_env = os.getenv("WEBHOOK_URL")    
